@@ -211,7 +211,6 @@ void pin_to_cpu(int cpu) {
     CPU_ZERO(&set);
     CPU_SET(cpu, &set);
     cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, getpid(), sizeof(set), &set);
-
     struct sched_param sp = { .sched_priority = 99 }; // Maximum priority for non preempted thread security
     sched_setscheduler(0, SCHED_FIFO, &sp);
 }
