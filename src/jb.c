@@ -250,12 +250,12 @@ int main() {
     int master_sock = new_socket();
     krop_master_sock = master_sock * 8;
 
-	int spray_sock[512];
-	for (int i = 0; i < 512; i++) {
-		spray_sock[i] = new_socket();
-		if (spray_sock[i] < 0)
-			*(volatile int*)0;
-	}
+    int spray_sock[512];
+      for (int i = 0; i < 512; i++) {
+	   spray_sock[i] = new_socket();
+	      if (spray_sock[i] < 0)
+		*(volatile int*)0;
+    }
 
     struct opaque o = {
         .master_sock = master_sock,
