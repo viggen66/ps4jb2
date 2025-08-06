@@ -1,3 +1,7 @@
+Create one line with jb.js and without comments
+
+```grep -v '^\s*//' jb.js | sed 's,//.*,,g' | tr -d '\n' > jb_min.js```
+
 Enhanced exploit race condition mitigation for original sleirsgoevy ps4jb2.
 
 1) Each critical thread is bound to a specific core 
