@@ -68,7 +68,6 @@ struct opaque {
     int* spray_sock;
 };
 
-
 void cleanup_sockets(int *sockets, int count) {
     for (int i = 0; i < count; i++) {
         if (sockets[i] >= 0) {
@@ -197,7 +196,6 @@ void sidt(unsigned long long* addr, unsigned short* size) {
     *size = *(unsigned short*)buf;
     *addr = *(unsigned long long*)(buf + 2);
 }
-
 
 // Assign the process to a specific core
 void pin_to_cpu(int cpu) {
