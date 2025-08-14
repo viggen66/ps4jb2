@@ -69,16 +69,6 @@ struct opaque {
     int* spray_sock;
 };
 
-
-void cleanup_sockets(int *sockets, int count) {
-    for (int i = 0; i < count; i++) {
-        if (sockets[i] >= 0) {
-            close(sockets[i]);
-            sockets[i] = -1;
-        }
-    }
-}
-
 void* use_thread(void* arg) {
     struct opaque* o = (struct opaque*)arg;
     char buf[CMSG_SPACE(sizeof(int))];
