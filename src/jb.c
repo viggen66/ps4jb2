@@ -357,7 +357,11 @@ int main() {
 
     set_pktinfo(master_sock, buf);
 
-    if (!verify_idt(idt_base)) continue;
+    if (!verify_idt(idt_base)) {
+        close(master_sock);
+        master_sock = new_socket();
+        continue;
+    }
 
     enter_krop();
 
