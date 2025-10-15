@@ -10,7 +10,7 @@
 #include <time.h>
 #include <errno.h>
 #include <sys/mman.h>
-#include <string.h>  // Added for memcpy
+#include <string.h> 
 #include <printf/printf.h>
 #include <librop/pthread_create.h>
 #include <ps4/errno.h>
@@ -26,7 +26,7 @@
 
 #define NANOSLEEP_100US "\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0"
 #define NANOSLEEP_75US "\0\0\0\0\0\0\0\0\x38\x2a\x01\0\0\0\0\0"
-#define NANOSLEEP_100US_ALT "\0\0\0\0\0\0\0\0\x00\x00\xA0\x86\01\0\0\0"
+#define NANOSLEEP_50US "\0\0\0\0\0\0\0\0\x88\x13\0\0\0\0\0\0"
 
 #define MAX_ATTEMPTS 10
 #define HEAP_GROOM_COUNT 100
@@ -396,7 +396,7 @@ int main() {
 
         iterative_socket_cleanup(master_sock);
 
-        nanosleep(NANOSLEEP_100US_ALT, NULL);
+        nanosleep(NANOSLEEP_50US, NULL);
         
         break;
     }
@@ -429,7 +429,7 @@ int main() {
         }
     }
 
-    nanosleep(NANOSLEEP_100US_ALT, NULL);
+    nanosleep(NANOSLEEP_50US, NULL);
 
     return 0;
 }
