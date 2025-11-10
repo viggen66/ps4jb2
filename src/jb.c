@@ -92,7 +92,7 @@ void optimized_cleanup(exploit_state_t* state) {
       if (state->stage < 1) {
         for (int i = 0; i < state->spray_count; i++) {
             if (state->spray_sock[i] >= 0) {
-                reset_ipv6_opts(state->spray_sock[i]); // Mais completo que só IPV6_RTHDR
+                reset_ipv6_opts(state->spray_sock[i]); 
             }
         }
         state->stage = 1;
