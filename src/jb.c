@@ -484,11 +484,5 @@ int main() {
 
     comprehensive_cleanup(&cleanup_state);
     nanosleep(NANOSLEEP_10MS, NULL);
-
-    if (spray_map != MAP_FAILED) {
-        munmap(spray_map, spray_size);
-    }
-
-    nanosleep(NANOSLEEP_10MS, NULL);
     return exploit_success ? 0 : 1;
 }
