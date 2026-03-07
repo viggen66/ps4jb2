@@ -5,6 +5,7 @@ Enhanced exploit race condition mitigation for original Sleirsgoevy's PS4jb2.
 3) The userland ROP chain is only executed after trigger_uaf(), fake_pktopts(), and IDT corruption has succeed
 4) Memory structures cleanup after successful exploit
 5) Safety exit to ensure OS stability
+6) So many optimizations
 
 
 https://viggen66.github.io/Webhost/
