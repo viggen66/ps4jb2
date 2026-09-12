@@ -51,16 +51,19 @@
 
 // Reusable socket cache
 #define SOCKET_CACHE_SIZE 64
+
 static int socket_cache[SOCKET_CACHE_SIZE];
-static int socket_cache_idx = 0;
+static int socket_cache_count = 0;
 static int socket_cache_initialized = 0;
 
 // Start socket cache with -1
-void init_socket_cache(void) {
-    for (int i = 0; i < SOCKET_CACHE_SIZE; i++) {
+void init_socket_cache(void)
+{
+    for (int i = 0; i < SOCKET_CACHE_SIZE; ++i) {
         socket_cache[i] = -1;
     }
-    socket_cache_idx = 0;
+
+    socket_cache_count = 0;
     socket_cache_initialized = 1;
 }
 
@@ -82,15 +85,15 @@ void safe_close_socket(int sock) {
 }
 
 // Use socket cache if available
-int fast_new_socket(void) {
+int fast_new_socket(void)
+{
     if (!socket_cache_initialized) {
         init_socket_cache();
     }
 
-    if (socket_cache_idx < SOCKET_CACHE_SIZE && socket_cache[socket_cache_idx] >= 0) {
-        int sock = socket_cache[socket_cache_idx];
-        socket_cache[socket_cache_idx] = -1;
-        socket_cache_idx++;
+    if (socket_cache_count > 0) {
+        int sock = socket_cache[--socket_cache_count];
+        socket_cache[socket_cache_count] = -1;
         return sock;
     }
 
@@ -98,8 +101,11 @@ int fast_new_socket(void) {
 }
 
 // Store socket cache
-void cache_socket(int sock) {
-    if (sock < 0) return;
+void cache_socket(int sock)
+{
+    if (sock < 0) {
+        return;
+    }
 
     if (!socket_cache_initialized) {
         init_socket_cache();
@@ -107,24 +113,31 @@ void cache_socket(int sock) {
 
     reset_ipv6_opts(sock);
 
-    if (socket_cache_idx > 0) {
-        socket_cache_idx--;
-        socket_cache[socket_cache_idx] = sock;
+    if (socket_cache_count < SOCKET_CACHE_SIZE) {
+        socket_cache[socket_cache_count++] = sock;
     } else {
         safe_close_socket(sock);
     }
 }
 
 // Clear Cache
-void flush_socket_cache(void) {
-    for (int i = 0; i < SOCKET_CACHE_SIZE; i++) {
-        if (socket_cache[i] >= 0) {
-            safe_close_socket(socket_cache[i]);
-            socket_cache[i] = -1;
-        }
+void flush_socket_cache(void)
+{
+    if (!socket_cache_initialized) {
+        return;
     }
-    socket_cache_idx = 0;
+
+    while (socket_cache_count > 0) {
+        int sock = socket_cache[--socket_cache_count];
+
+        if (sock >= 0) {
+            safe_close_socket(sock);
+        }
+
+        socket_cache[socket_cache_count] = -1;
+    }
 }
+
 
 #define GET_TCLASS(name) \
 int name(int s) { \
