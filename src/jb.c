@@ -15,7 +15,6 @@
 #include <librop/pthread_create.h>
 #include <ps4/errno.h>
 
-#define new_socket() socket(AF_INET6, SOCK_DGRAM, 0)
 #define IPV6_2292PKTINFO 19
 #define IPV6_2292PKTOPTIONS 25
 #define TCLASS_MASTER 0x13370000
