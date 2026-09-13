@@ -447,10 +447,6 @@ void targeted_heap_defragmentation(void) {
 uint64_t original_idt_base = 0;
 uint16_t original_idt_size = 0;
 
-void save_kernel_state() {
-    sidt(&original_idt_base, &original_idt_size);
-}
-
 void (*enter_krop)(void);
 extern uint64_t krop_idt_base;
 extern uint64_t krop_jmp_crash;
