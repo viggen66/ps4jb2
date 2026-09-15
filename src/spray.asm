@@ -34,7 +34,7 @@ mov rax, [gs:0] ; thread
 mov rax, [rax+8] ; td_proc
 mov rax, [rax+0x48] ; p_fd
 mov rdx, [rax] ; fd_ofiles
-mov rcx, 512
+mov rcx, 320
 .closeup_loop:
 lodsd
 mov qword [rdx+8*rax], 0

