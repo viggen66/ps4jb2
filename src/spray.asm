@@ -14,7 +14,7 @@ pop rsi
 ret
 
 kernel_entry:
-mov rsi, [rsi+8]           ; socket closeup
+mov rsi, [rsi+8]           ; rsi = pointer to args
 push qword [rsi]           ; socket closeup (array de FDs)
 push qword [rsi+8]         ; kernel base
 mov rcx, 1024
@@ -37,6 +37,7 @@ mov rax, [rax+8]           ; td_proc
 mov rax, [rax+0x48]        ; p_fd
 mov rdx, [rax]             ; fd_ofiles
 mov rcx, CLOSEUP_COUNT
+cld                        ; DF=0 (defensive)
 .closeup_loop:
 lodsd                      ; eax = *rsi++, rsi += 4
 mov qword [rdx+8*rax], 0   ; fd_ofiles[fd] = 0
