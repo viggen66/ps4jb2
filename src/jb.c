@@ -502,7 +502,7 @@ int main() {
         }
 
         if (overlap_idx < 0)
-            continue;
+            break;
 
         int overlap_sock = spray_sock[overlap_idx];
         dirty_fds[dirty_count++] = overlap_sock;
