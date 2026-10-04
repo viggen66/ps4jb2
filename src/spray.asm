@@ -1,6 +1,6 @@
 use64
 
-%define CLOSEUP_COUNT 512   ;  must match CLOSEUP_ARRAY_SIZE in jb.c
+%define CLOSEUP_COUNT 269   ;  must match CLOSEUP_ARRAY_SIZE in jb.c
 
 entry:
 push rsi

