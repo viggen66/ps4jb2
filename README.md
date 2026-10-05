@@ -29,10 +29,10 @@ This version builds on the original **PS4jb2** exploit by reinforcing the race-c
 
 ### ⚙️ Technical Hardening
 
-- 🧩 **Advanced heap grooming** and **targeted defragmentation**
-- 🔌 **Clean socket caching** and **dirty FD management**
-- 🚀 **Multi-core payload dispatch** for stability
-- 📦 **Compact, self-contained C implementation**
+- **Advanced heap grooming** and **targeted defragmentation**
+- **Clean socket caching** and **dirty FD management**
+- **Multi-core payload dispatch** for stability
+- **Compact, self-contained C implementation**
 
 ---
 
