@@ -43,16 +43,6 @@ This version builds on the original **PS4jb2** exploit by reinforcing the race-c
 
 ---
 
-## ⚠️ Disclaimer
-
-This project is intended for **security research** and **educational purposes only**.
-
-- Use only on devices **you own**.
-- The author is **not responsible** for any damage, data loss, console bans, or illegal use.
-- No warranty is provided, express or implied.
-
----
-
 <p align="center">
   <sub>Maintained by <a href="https://viggen66.github.io/Webhost/">viggen66</a> · Based on work by Sleirsgoevy</sub>
 </p>
