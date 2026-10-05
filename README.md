@@ -1,11 +1,58 @@
-Enhanced exploit race condition mitigation for original Sleirsgoevy's PS4jb2.
+# PS4jb2 — Enhanced Exploit Race Condition Mitigation
 
-1) Each critical thread is bound to a specific core 
-2) Malloc sprays are performed on all available cores, for increased reclaiming freed memory during UAF and exploit success.
-3) The userland ROP chain is only executed after trigger_uaf(), fake_pktopts(), and IDT corruption has succeed
-4) Memory structures cleanup after successful exploit
-5) Safety exit to ensure OS stability
-6) So many optimizations
+> An enhanced fork of **Sleirsgoevy's PS4jb2** with improved race-condition reliability, multi-core spray strategy, and safer cleanup.
 
+<p align="center">
+  <a href="https://viggen66.github.io/Webhost/">
+    <img src="https://img.shields.io/badge/Website-viggen66.github.io-blue?style=for-the-badge&logo=github" alt="Website">
+  </a>
+  <img src="https://img.shields.io/badge/Language-C-blue?style=for-the-badge&logo=c" alt="Language">
+  <img src="https://img.shields.io/badge/Platform-PS4-black?style=for-the-badge&logo=playstation" alt="Platform">
+  <img src="https://img.shields.io/badge/Status-Research-orange?style=for-the-badge" alt="Status">
+</p>
 
-https://viggen66.github.io/Webhost/
+---
+
+## ✨ Enhancements
+
+This version builds on the original **PS4jb2** exploit by reinforcing the race-condition window and hardening the overall reliability of the jailbreak.
+
+### 🧠 Core Improvements
+
+| # | Feature | Description |
+|---|---------|-------------|
+| 1 | **CPU Pinning** | Each critical thread is bound to a specific core to reduce scheduler noise and improve race timing determinism. |
+| 2 | **Multi-Core Malloc Spray** | Malloc sprays run across all available cores, increasing the chance of reclaiming freed memory during the UAF window. |
+| 3 | **Gated Userland ROP** | The userland ROP chain executes **only** after `trigger_uaf()`, `fake_pktopts()`, and IDT corruption have all succeeded. |
+| 4 | **Memory Cleanup** | Kernel and userland structures are properly torn down after a successful exploit. |
+| 5 | **Safety Exit** | A guarded exit path preserves OS stability even if the exploit partially fails. |
+
+### ⚙️ Technical Hardening
+
+- 🧩 **Advanced heap grooming** and **targeted defragmentation**
+- 🔌 **Clean socket caching** and **dirty FD management**
+- 🚀 **Multi-core payload dispatch** for stability
+- 📦 **Compact, self-contained C implementation**
+
+---
+
+## 🔗 Links
+
+- 🌐 **Project site:** [viggen66.github.io/Webhost](https://viggen66.github.io/Webhost/)
+- 📖 **Original project:** [Sleirsgoevy / PS4jb2](https://github.com/Sleirsgoevy)
+
+---
+
+## ⚠️ Disclaimer
+
+This project is intended for **security research** and **educational purposes only**.
+
+- Use only on devices **you own**.
+- The author is **not responsible** for any damage, data loss, console bans, or illegal use.
+- No warranty is provided, express or implied.
+
+---
+
+<p align="center">
+  <sub>Maintained by <a href="https://viggen66.github.io/Webhost/">viggen66</a> · Based on work by Sleirsgoevy</sub>
+</p>
