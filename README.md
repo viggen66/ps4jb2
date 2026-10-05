@@ -43,6 +43,8 @@ Classic Webhost
 
 Fastest 672 exploit
 - 🌐 **Fast672:** [viggen66.github.io/Fast672](https://viggen66.github.io/Fast672/)
+
+Original 672 project
 - 📖 **Original project:** [Sleirsgoevy / PS4jb2](https://github.com/Sleirsgoevy)
 
 ---
