@@ -1,4 +1,4 @@
-# PS4jb2 — Enhanced Exploit Race Condition Mitigation
+# PS4jb2 — Enhanced PS4 6.72 Jailbreak
 
 > An enhanced fork of **Sleirsgoevy's PS4jb2** with improved race-condition reliability, multi-core spray strategy, and safer cleanup.
 
