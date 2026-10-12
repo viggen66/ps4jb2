@@ -1,6 +1,6 @@
 # PS4jb2 — Enhanced PS4 6.72 Jailbreak
 
-> An enhanced fork of **Sleirsgoevy's PS4jb2** with improved race-condition reliability, multi-core spray strategy, and safer cleanup.
+> An enhanced fork of **Sleirsgoevy's PS4jb2** with improved race-condition reliability, multi-core spray strategy, and safer exit.
 
 <p align="center">
   <a href="https://viggen66.github.io/Webhost/">
